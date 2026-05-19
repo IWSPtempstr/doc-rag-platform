@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY ../requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY ../backend /app/backend
+COPY . /app/mcp
+
+ENV DATABASE_URL=sqlite:///./storage/app.db
+ENV REDIS_URL=redis://redis:6379/0
+ENV CHAT_PROVIDER=openai
+ENV EMBEDDING_PROVIDER=ollama
+ENV CHAT_MODEL=deepseek-v4-flash
+ENV EMBEDDING_MODEL=nomic-embed-text
+ENV OLLAMA_BASE_URL=http://ollama:11434
+ENV STORAGE_DIR=storage
+
+CMD ["python", "/app/mcp/server.py"]

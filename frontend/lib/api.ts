@@ -1,0 +1,71 @@
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail?.message || err.detail || res.statusText);
+  }
+  return res.json();
+}
+
+export const api = {
+  // Documents
+  uploadDocument: (formData: FormData) =>
+    request("/documents/upload", { method: "POST", body: formData, headers: {} }),
+  listDocuments: (params?: {
+    tag?: string; status?: string; search?: string;
+    has_images?: boolean; offset?: number; limit?: number;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== "" && v !== null) qs.set(k, String(v));
+      });
+    }
+    const q = qs.toString();
+    return request(`/documents${q ? `?${q}` : ""}`);
+  },
+  getDocument: (id: number) => request(`/documents/${id}`),
+  updateDocument: (id: number, data: object) =>
+    request(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteDocument: (id: number) =>
+    request(`/documents/${id}`, { method: "DELETE" }),
+  getDocumentChunks: (id: number) => request(`/documents/${id}/chunks`),
+  getDocumentAssets: (id: number) => request(`/documents/${id}/assets`),
+  getDocumentJobs: (id: number) => request(`/documents/${id}/jobs`),
+  reindexDocument: (id: number) =>
+    request(`/documents/${id}/reindex`, { method: "POST" }),
+
+  // Jobs
+  getJob: (id: number) => request(`/jobs/${id}`),
+
+  // Chat
+  query: (question: string, top_k?: number) =>
+    request("/chat/query", { method: "POST", body: JSON.stringify({ question, top_k }) }),
+  listSessions: () => request("/chat/sessions"),
+  getSession: (id: number) => request(`/chat/sessions/${id}`),
+
+  // Settings
+  getSettings: () => request("/settings/provider"),
+  updateSettings: (data: object) =>
+    request("/settings/provider", { method: "POST", body: JSON.stringify(data) }),
+
+  // Health
+  getHealth: () => request("/health"),
+
+  // Traces
+  getIngestionTraces: (limit?: number) => request(`/traces/ingestion?limit=${limit || 50}`),
+  getQueryTraces: (limit?: number) => request(`/traces/query?limit=${limit || 50}`),
+
+  // Evaluations
+  runEvaluation: (strategy?: string) =>
+    request("/evaluations/run", { method: "POST", body: JSON.stringify({ strategy: strategy || "dense" }) }),
+  getEvaluationResults: () => request("/evaluations/results"),
+
+  // Collections
+  listCollections: () => request("/collections"),
+};

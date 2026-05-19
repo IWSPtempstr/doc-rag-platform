@@ -1,0 +1,153 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_storage:/app/storage
+    environment:
+      - DATABASE_URL=sqlite:///./storage/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - STORAGE_DIR=storage
+      - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
+      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    volumes:
+      - backend_storage:/app/storage
+    environment:
+      - DATABASE_URL=sqlite:///./storage/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - STORAGE_DIR=storage
+      - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
+      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.from_url('redis://redis:6379/0'); r.ping()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp/Dockerfile
+    stdin_open: true
+    environment:
+      - DATABASE_URL=sqlite:///./storage/app.db
+      - REDIS_URL=redis://redis:6379/0
+      - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - STORAGE_DIR=storage
+      - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
+      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 本地 Ollama 服务（可选，如需使用 API provider 可注释掉）
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   restart: unless-stopped
+
+# ---- Persistent Volumes ----
+# redis_data:       Redis RDB/AOF persistence, job queues, cache
+# backend_storage:  SQLite DB, Chroma vector DB, uploaded files, extracted image assets, traces, evaluations
+# ollama_data:      (only when using local Ollama) Downloaded LLM and embedding models
+volumes:
+  redis_data:
+  backend_storage:
+  # ollama_data:
