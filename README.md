@@ -1,4 +1,4 @@
-# 文档 RAG 平台 v1.1
+# 文档 RAG 平台 v2.0
 
 Document Retrieval-Augmented Generation Platform — 一个基于 FastAPI + Next.js + Redis + Chroma + DeepSeek/OpenAI-compatible API + Ollama Embedding 的文档问答平台。
 
@@ -10,6 +10,8 @@ Document Retrieval-Augmented Generation Platform — 一个基于 FastAPI + Next
 | 前端 | Next.js 14 + React 18 + TypeScript |
 | 缓存/队列 | Redis (Streams, Cache, Rate Limit) |
 | 向量库 | ChromaDB |
+| PDF 处理 | PyMuPDF (fitz) |
+| 视觉模型 | OpenAI-compatible Vision API (GPT-4o 等多模态模型) |
 | LLM/Embedding | Chat 使用 DeepSeek/OpenAI-compatible API，Embedding 默认使用本地 Ollama |
 | MCP | Python stdin/stdout JSON-RPC |
 
@@ -25,6 +27,17 @@ Document Retrieval-Augmented Generation Platform — 一个基于 FastAPI + Next
 - Chat Session/Message 历史
 - Chat Provider 与 Embedding Provider 独立配置
 - 健康检查（SQLite/Redis/Chroma/Provider/Queue）
+
+### v2.0
+- PDF 图片提取：PyMuPDF 提取 PDF 内嵌图片
+- 图片上传：支持 PNG/JPG/GIF/WebP/BMP 作为独立文档
+- Vision 描述生成：调用多模态 Vision API 为图片生成中文描述
+- 图片资产管理：图片关联到 chunks，存储 source_page、caption、associated_chunks
+- 文档重新索引：一键重置并重新处理文档，保留标签和元数据
+- 文档详情页：展示 chunks + 图片资产 + 任务历史 + 进度追踪
+- 增强文档列表：搜索、状态筛选、图片筛选、批量操作
+- Docker 健康检查：所有服务（redis/backend/worker/frontend/mcp）添加 healthcheck
+- 持久化卷文档：标注所有 Docker volume 的用途
 
 ### v1.1
 - Hybrid Search: Dense + BM25 Sparse + RRF Fusion
@@ -113,6 +126,9 @@ python server.py
 | CHAT_RATE_LIMIT_PER_MINUTE | 20 | 问答限流 |
 | UPLOAD_RATE_LIMIT_PER_MINUTE | 10 | 上传限流 |
 | JOB_MAX_RETRIES | 3 | 任务最大重试 |
+| VISION_API_KEY | (CHAT_API_KEY) | Vision API Key，用于图片描述生成 |
+| VISION_API_BASE | (CHAT_API_BASE) | Vision API Base |
+| VISION_MODEL | deepseek-v4-pro | Vision 模型（需多模态模型如 gpt-4o） |
 | DEFAULT_TOP_K | 5 | 检索结果数 |
 | DEFAULT_CHUNK_SIZE | 500 | 切片大小 |
 | DEFAULT_CHUNK_OVERLAP | 50 | 切片重叠 |
@@ -147,6 +163,15 @@ python server.py
 | GET | /api/chat/sessions | 会话列表 |
 | POST | /api/settings/provider | 更新设置 |
 | GET | /api/health | 健康检查 |
+
+### v2.0
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/documents/{id}/reindex | 重新索引文档 |
+| GET | /api/documents/{id}/assets | 文档图片资产 |
+| GET | /api/documents/{id}/jobs | 文档任务历史 |
+| GET | /api/assets/{path} | 图片静态文件（从 storage/assets 挂载） |
 
 ### v1.1
 
@@ -187,6 +212,18 @@ curl http://localhost:8000/api/health
 curl -X POST http://localhost:8000/api/evaluations/run \
   -H "Content-Type: application/json" \
   -d '{"strategy": "hybrid"}'
+
+# v2.0 重新索引
+curl -X POST http://localhost:8000/api/documents/1/reindex
+
+# v2.0 查看图片资产
+curl http://localhost:8000/api/documents/1/assets
+
+# v2.0 查看文档任务历史
+curl http://localhost:8000/api/documents/1/jobs
+
+# v2.0 查看 chunks（含 image_refs）
+curl http://localhost:8000/api/documents/1/chunks
 ```
 
 ## 目录结构
@@ -208,6 +245,9 @@ workspace/
 │   │   │   ├── traces.py, evaluations.py, collections.py
 │   │   └── services/            # 业务服务
 │   │       ├── document_loader.py, splitter.py
+│   │       ├── image_loader.py       # v2.0 PDF/图片提取
+│   │       ├── vision_service.py     # v2.0 Vision 描述生成
+│   │       ├── asset_service.py      # v2.0 图片资产管理
 │   │       ├── embedding_provider.py, vector_store.py
 │   │       ├── retriever.py, rag_service.py
 │   │       ├── cache_service.py, rate_limit.py
@@ -216,16 +256,18 @@ workspace/
 │   └── Dockerfile.worker
 ├── frontend/                    # Next.js 前端
 │   ├── app/
-│   │   ├── documents/           # 文档管理
+│   │   ├── documents/           # 文档列表 + [id] 详情页
 │   │   ├── chat/                # 问答
 │   │   ├── settings/            # 设置
 │   │   ├── health/              # 健康检查
 │   │   └── evaluations/         # 评估
-│   └── lib/api.ts               # API client
+│   └── lib/                      # API client + 类型定义
+│       ├── api.ts
+│       └── types.ts               # v2.0 TypeScript 类型定义
 ├── mcp/
 │   └── server.py                # MCP server
 ├── storage/                     # 数据存储
-│   ├── uploads/, chroma/, traces/, evaluations/
+│   ├── uploads/, chroma/, traces/, evaluations/, assets/
 ├── docker-compose.yml
 └── requirements.txt
 ```
