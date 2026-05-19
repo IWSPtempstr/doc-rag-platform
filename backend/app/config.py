@@ -71,7 +71,7 @@ class Config:
     # v2.0 — Vision (multimodal caption)
     VISION_API_KEY = os.getenv("VISION_API_KEY") or CHAT_API_KEY
     VISION_API_BASE = os.getenv("VISION_API_BASE") or CHAT_API_BASE
-    VISION_MODEL = os.getenv("VISION_MODEL", "deepseek-v4-pro")
+    VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o")
     ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
     ASSETS_DIR = os.path.join(STORAGE_DIR, "assets")
 
