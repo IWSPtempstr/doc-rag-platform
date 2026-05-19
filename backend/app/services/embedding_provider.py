@@ -14,7 +14,7 @@ def get_embeddings(
     if provider == "ollama":
         return _get_ollama_embeddings(texts, model or config.OLLAMA_EMBED_MODEL)
     if provider == "openai":
-        return _get_openai_embeddings(texts, model or config.OPENAI_EMBED_MODEL)
+        return _get_openai_embeddings(texts, model or config.DEFAULT_EMBED_MODEL)
     raise ValueError(f"不支持的 embedding provider: {provider}")
 
 

@@ -97,9 +97,7 @@ def rag_query(
     chat_provider = chat_provider or provider or config.DEFAULT_CHAT_PROVIDER
     embedding_provider = embedding_provider or config.DEFAULT_EMBEDDING_PROVIDER
     chat_model = model or (config.OLLAMA_CHAT_MODEL if chat_provider == "ollama" else config.DEFAULT_CHAT_MODEL)
-    embed_model = embedding_model or (
-        config.OLLAMA_EMBED_MODEL if embedding_provider == "ollama" else config.OPENAI_EMBED_MODEL
-    )
+    embed_model = embedding_model or config.DEFAULT_EMBED_MODEL
 
     # 1. 查缓存
     cached = get_cache(
