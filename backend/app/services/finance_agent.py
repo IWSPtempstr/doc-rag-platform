@@ -28,6 +28,7 @@ class FinanceAgentState(TypedDict, total=False):
     verification: dict
     needs_retrieval_retry: bool
     supervisor_phase: str
+    retrieval_count: int
 
 
 def run_finance_agent(
@@ -79,6 +80,7 @@ def run_finance_agent(
         "question": question,
         "mode": mode,
         "supervisor_phase": "retrieval",
+        "retrieval_count": 0,
     }
 
     try:
@@ -165,6 +167,7 @@ def _run_graph_or_fallback(db: Session, run_id: int, state: FinanceAgentState) -
 
 
 def _run_sequential(db: Session, run_id: int, state: FinanceAgentState) -> FinanceAgentState:
+    max_retries = 2
     for name, fn in [
         ("retrieval", _retrieval_node),
         ("facts", _fact_node),
@@ -173,7 +176,14 @@ def _run_sequential(db: Session, run_id: int, state: FinanceAgentState) -> Finan
         ("verifier", _verifier_node),
     ]:
         state = _recorded(db, run_id, name, fn, state)
-        if name == "verifier" and state.get("needs_retrieval_retry"):
+        if name == "retrieval" and not state.get("citations"):
+            retries = state.get("retrieval_count", 0)
+            while not state.get("citations") and retries < max_retries:
+                retries += 1
+                state["retrieval_count"] = retries
+                state = _recorded(db, run_id, f"retrieval_retry_{retries}", _retrieval_node, state)
+        if name == "verifier" and not state.get("verification", {}).get("passed") and state.get("retrieval_count", 0) < 2:
+            state["retrieval_count"] = state.get("retrieval_count", 0) + 1
             state = _recorded(db, run_id, "retrieval_retry", _retrieval_node, state)
             state = _recorded(db, run_id, "analysis_retry", _analysis_node, state)
             state = _recorded(db, run_id, "verifier_retry", _verifier_node, state)
@@ -220,10 +230,16 @@ def _supervisor_router(state: FinanceAgentState) -> str:
     has_answer = bool(state.get("answer"))
     verification = state.get("verification") or {}
     verified = verification.get("passed", False)
+    retrieval_count = state.get("retrieval_count", 0)
 
-    if phase == "retrieval" and not has_citations:
-        return "retrieval"
-    if phase == "retrieval" and has_citations:
+    if phase == "retrieval":
+        if not has_citations and retrieval_count < 2:
+            state["retrieval_count"] = retrieval_count + 1
+            return "retrieval"
+        if not has_citations:
+            state["supervisor_phase"] = "verifier"
+            state["verification"] = {"passed": False, "errors": ["检索未返回结果，已重试 2 次"]}
+            return "verifier"
         state["supervisor_phase"] = "facts"
         return "facts" if not has_facts else _next_phase(state)
 
@@ -242,12 +258,12 @@ def _supervisor_router(state: FinanceAgentState) -> str:
     if phase == "verifier":
         if verified:
             return "done"
-        if not state.get("needs_retrieval_retry", False):
-            state["needs_retrieval_retry"] = True  # mark retry done
-            return "done"  # graceful fail after one retry
-        state["supervisor_phase"] = "retrieval"
-        state["needs_retrieval_retry"] = True
-        return "retrieval"
+        if retrieval_count < 2:
+            state["supervisor_phase"] = "retrieval"
+            state["retrieval_count"] = retrieval_count + 1
+            state["needs_retrieval_retry"] = True
+            return "retrieval"
+        return "done"
 
     return phase
 
@@ -386,30 +402,38 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
         value = fact.get("value")
         if evidence and value is not None:
             numbers_in_evidence = re.findall(r"[\d,]+\.?\d*", evidence)
-            consistent = any(
-                _normalize_number(n, None) > 0 and abs(_normalize_number(n, None) - value) < 0.01 * abs(value)
-                for n in numbers_in_evidence
-            )
+            unit_words_in_evidence = re.findall(r"(million|billion)", evidence, flags=re.I)
+            consistent = False
+            for n in numbers_in_evidence:
+                ev_value = _normalize_number(n, unit_words_in_evidence[0] if unit_words_in_evidence else None)
+                if ev_value > 0 and abs(ev_value - value) < max(0.01 * abs(value), 1):
+                    consistent = True
+                    break
             if not consistent:
                 errors.append(f"{fact['label']} 值与证据文本不一致")
+
+    calculations = state.get("calculations", [])
+    calc_results: set[str] = set()
+    for calc in calculations:
+        if calc.get("value") is not None:
+            calc_results.add(str(calc["value"]))
+            if calc["name"] == "net_margin":
+                if calc["value"] < 0 or calc["value"] > 1:
+                    errors.append(f"Net margin {calc['value']} 超出合理范围 [0, 1]")
 
     answer = state.get("answer", "")
     cited_text = " ".join(c.get("content", "") for c in (state.get("citations") or []))
     answer_numbers = re.findall(r"[\d,]+\.?\d*\s*(?:million|billion|%|percent)?", answer, flags=re.I)
-    unsupported = [n.strip() for n in answer_numbers
-                   if n.strip() and n.strip() not in cited_text]
+    unsupported = [
+        n.strip() for n in answer_numbers
+        if n.strip() and n.strip() not in cited_text
+        and not any(cr in n for cr in calc_results)
+    ]
     if unsupported:
         errors.append(f"报告中包含未在引用中出现的数字: {', '.join(unsupported[:3])}")
 
     num_citations = len(state.get("citations", []))
     coverage = min(1.0, num_citations / 5)
-
-    calculations = state.get("calculations", [])
-    cross_ref_ok = True
-    for calc in calculations:
-        if calc["name"] == "net_margin" and calc["value"] is not None:
-            if calc["value"] < 0 or calc["value"] > 1:
-                errors.append(f"Net margin {calc['value']} 超出合理范围 [0, 1]")
 
     state["verification"] = {
         "passed": not errors,

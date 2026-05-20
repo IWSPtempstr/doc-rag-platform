@@ -77,11 +77,16 @@ export const api = {
   me: () => request("/auth/me"),
 
   // Finance
-  listCompanies: (workspace_id = 1) => request(`/finance/companies?workspace_id=${workspace_id}`),
+  listCompanies: (workspace_id?: number) => {
+    const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
+    return request(`/finance/companies${qs}`);
+  },
   createCompany: (data: object) =>
     request("/finance/companies", { method: "POST", body: JSON.stringify(data) }),
-  getCompany: (ticker: string, workspace_id = 1) =>
-    request(`/finance/companies/${encodeURIComponent(ticker)}?workspace_id=${workspace_id}`),
+  getCompany: (ticker: string, workspace_id?: number) => {
+    const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
+    return request(`/finance/companies/${encodeURIComponent(ticker)}${qs}`);
+  },
   importFiling: (ticker: string, data: object) =>
     request(`/finance/companies/${encodeURIComponent(ticker)}/filings/import`, {
       method: "POST",
@@ -95,6 +100,8 @@ export const api = {
     request("/finance/agent/query", { method: "POST", body: JSON.stringify(data) }),
   runFinanceEvaluation: (data: object) =>
     request("/finance/evaluations/run", { method: "POST", body: JSON.stringify(data) }),
-  listFinanceEvaluationResults: (workspace_id = 1) =>
-    request(`/finance/evaluations/results?workspace_id=${workspace_id}`),
+  listFinanceEvaluationResults: (workspace_id?: number) => {
+    const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
+    return request(`/finance/evaluations/results${qs}`);
+  },
 };
