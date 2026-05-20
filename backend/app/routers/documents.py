@@ -18,7 +18,7 @@ from app.config import config
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".md", ".markdown", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".md", ".markdown", ".txt", ".htm", ".html", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 os.makedirs(config.UPLOAD_DIR, exist_ok=True)

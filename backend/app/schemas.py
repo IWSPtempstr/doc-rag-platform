@@ -1,7 +1,7 @@
 """Pydantic Schema — API 输入输出"""
 
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -190,6 +190,174 @@ class EvaluationResultResponse(BaseModel):
     context_precision: Optional[float] = None
     faithfulness: Optional[float] = None
     answer_relevancy: Optional[float] = None
+    results: Optional[Any] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---- Auth / Workspace ----
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    name: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WorkspaceResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MeResponse(BaseModel):
+    user: UserResponse
+    workspaces: list[WorkspaceResponse] = []
+
+
+# ---- Finance ----
+class CompanyCreateRequest(BaseModel):
+    workspace_id: int = 1
+    ticker: str
+    name: Optional[str] = None
+    cik: Optional[str] = None
+    exchange: Optional[str] = None
+    industry: Optional[str] = None
+
+
+class CompanyResponse(BaseModel):
+    id: int
+    workspace_id: int
+    ticker: str
+    name: str
+    cik: Optional[str] = None
+    exchange: Optional[str] = None
+    industry: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    filing_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class FilingImportRequest(BaseModel):
+    workspace_id: int = 1
+    year: Optional[int] = None
+    accession_number: Optional[str] = None
+
+
+class FilingBindDocumentRequest(BaseModel):
+    document_id: int
+    fiscal_year: int
+    filing_type: Literal["10-K"] = "10-K"
+
+
+class FilingResponse(BaseModel):
+    id: int
+    workspace_id: int
+    company_id: int
+    document_id: Optional[int] = None
+    accession_number: Optional[str] = None
+    filing_type: str
+    fiscal_year: int
+    filed_at: Optional[datetime] = None
+    source_url: Optional[str] = None
+    status: str
+    metadata_json: Optional[dict] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    company: Optional[dict] = None
+    document: Optional[dict] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FilingSectionResponse(BaseModel):
+    id: int
+    filing_id: int
+    item_code: str
+    title: str
+    content_preview: Optional[str] = None
+    char_start: int
+    char_end: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FinancialFactResponse(BaseModel):
+    id: int
+    filing_id: int
+    metric: str
+    label: str
+    value: Optional[float] = None
+    unit: Optional[str] = None
+    period: Optional[str] = None
+    source: str
+    evidence: Optional[str] = None
+    confidence: Optional[float] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FinanceAgentQueryRequest(BaseModel):
+    workspace_id: int = 1
+    company_ticker: str
+    filing_id: Optional[int] = None
+    question: str = Field(..., min_length=1)
+    mode: str = "full"
+
+
+class AgentStepResponse(BaseModel):
+    id: int
+    run_id: int
+    step_order: int
+    node_name: str
+    status: str
+    input_json: Optional[dict] = None
+    output_json: Optional[dict] = None
+    error: Optional[str] = None
+    duration_ms: Optional[float] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FinanceAgentQueryResponse(BaseModel):
+    answer: str
+    citations: list[dict] = []
+    facts: list[dict] = []
+    calculations: list[dict] = []
+    agent_run_id: int
+    steps: list[dict] = []
+    verification: dict = {}
+
+
+class FinanceEvaluationRunRequest(BaseModel):
+    workspace_id: int = 1
+    dataset_source: str = "custom_10k"
+    strategy: str = "finance_agent"
+
+
+class FinanceEvaluationResultResponse(BaseModel):
+    id: int
+    workspace_id: int
+    dataset_id: Optional[int] = None
+    strategy: str
+    metrics: Optional[dict] = None
     results: Optional[Any] = None
     created_at: datetime
 

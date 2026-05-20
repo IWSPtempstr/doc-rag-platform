@@ -75,5 +75,11 @@ class Config:
     ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
     ASSETS_DIR = os.path.join(STORAGE_DIR, "assets")
 
+    # Auth / finance workspace defaults
+    AUTH_SECRET = os.getenv("AUTH_SECRET", os.getenv("JWT_SECRET", "dev-only-change-me"))
+    AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rag_finance_session")
+    AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "604800"))
+    SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "FinancialRAGWorkbench/0.1 contact@example.com")
+
 
 config = Config()

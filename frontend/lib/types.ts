@@ -116,3 +116,65 @@ export interface ChatSession {
   updated_at: string;
   messages: { role: string; content: string; citations?: any; cache_hit?: boolean }[];
 }
+
+export interface Company {
+  id: number;
+  workspace_id: number;
+  ticker: string;
+  name: string;
+  cik: string | null;
+  exchange: string | null;
+  industry: string | null;
+  created_at: string;
+  updated_at: string | null;
+  filing_count: number;
+}
+
+export interface Filing {
+  id: number;
+  workspace_id: number;
+  company_id: number;
+  document_id: number | null;
+  accession_number: string | null;
+  filing_type: string;
+  fiscal_year: number;
+  filed_at: string | null;
+  source_url: string | null;
+  status: string;
+  metadata_json: Record<string, any> | null;
+  created_at: string;
+  updated_at: string | null;
+  company?: { id: number; ticker: string; name: string; cik: string | null };
+  document?: { id: number; filename: string; status: string; chunk_count: number };
+}
+
+export interface FilingSection {
+  id: number;
+  filing_id: number;
+  item_code: string;
+  title: string;
+  content_preview: string | null;
+  char_start: number;
+  char_end: number;
+  created_at: string;
+}
+
+export interface FinanceAgentResult {
+  answer: string;
+  citations: any[];
+  facts: any[];
+  calculations: any[];
+  agent_run_id: number;
+  steps: any[];
+  verification: Record<string, any>;
+}
+
+export interface FinanceEvalResult {
+  id: number;
+  workspace_id: number;
+  dataset_id: number | null;
+  strategy: string;
+  metrics: Record<string, any> | null;
+  results: any;
+  created_at: string;
+}

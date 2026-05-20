@@ -10,6 +10,8 @@ def load_document(file_path: str) -> str:
     ext = Path(file_path).suffix.lower()
     if ext == ".pdf":
         return _load_pdf(file_path)
+    elif ext in (".htm", ".html"):
+        return _load_html(file_path)
     elif ext == ".docx":
         return _load_docx(file_path)
     elif ext in (".md", ".markdown"):
@@ -51,6 +53,11 @@ def _load_text(file_path: str) -> str:
         return f.read()
 
 
+def _load_html(file_path: str) -> str:
+    from app.services.sec_connector import load_filing_text
+    return load_filing_text(file_path)
+
+
 def load_document_v2(file_path: str) -> dict:
     """v2.0: Load document and return {"text": str, "images": [dict]}.
 
@@ -76,6 +83,8 @@ def load_document_v2(file_path: str) -> dict:
         }
     elif ext == ".docx":
         return {"text": _load_docx(file_path), "images": []}
+    elif ext in (".htm", ".html"):
+        return {"text": _load_html(file_path), "images": []}
     elif ext in (".md", ".markdown", ".txt"):
         return {"text": _load_text(file_path), "images": []}
     else:

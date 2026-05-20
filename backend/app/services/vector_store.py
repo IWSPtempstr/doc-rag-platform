@@ -46,6 +46,7 @@ def add_chunks(
     embedding_provider: str | None = None,
     embedding_model: str | None = None,
     image_asset_map: dict[int, list[dict]] | None = None,
+    extra_metadata: dict | None = None,
 ):
     """批量写入 chunks 到 Chroma"""
     import json
@@ -54,20 +55,26 @@ def add_chunks(
         return
 
     ids = [f"doc_{document_id}_{c['chunk_id']}" for c in chunks]
-    metadatas = [
-        {
+    metadatas = []
+    for c in chunks:
+        chunk_meta = c.get("metadata", {})
+        meta = {
             "document_id": document_id,
             "filename": filename,
             "chunk_id": c["chunk_id"],
-            "chunk_index": c["metadata"]["chunk_index"],
+            "chunk_index": chunk_meta["chunk_index"],
             "kb_version": kb_version,
             "embedding_provider": embedding_provider or config.DEFAULT_EMBEDDING_PROVIDER,
             "embedding_model": embedding_model or config.DEFAULT_EMBED_MODEL,
-            "image_refs": json.dumps(image_asset_map.get(c["metadata"]["chunk_index"], []))
+            "image_refs": json.dumps(image_asset_map.get(chunk_meta["chunk_index"], []))
             if image_asset_map else "[]",
         }
-        for c in chunks
-    ]
+        if extra_metadata:
+            meta.update({k: v for k, v in extra_metadata.items() if v is not None})
+        for key in ("section_item", "section_title"):
+            if chunk_meta.get(key):
+                meta[key] = chunk_meta[key]
+        metadatas.append(meta)
     documents = [c["content"] for c in chunks]
 
     collection = get_collection(embedding_provider, embedding_model)
@@ -79,13 +86,17 @@ def query(
     top_k: int = 5,
     embedding_provider: str | None = None,
     embedding_model: str | None = None,
+    where: dict | None = None,
 ) -> list[dict]:
     """Dense 检索，返回 [{chunk_id, document_id, filename, content, score}]"""
     collection = get_collection(embedding_provider, embedding_model)
     if collection.count() == 0:
         return []
 
-    results = collection.query(query_embeddings=[embedding], n_results=top_k)
+    query_kwargs = {"query_embeddings": [embedding], "n_results": top_k}
+    if where:
+        query_kwargs["where"] = where
+    results = collection.query(**query_kwargs)
     items = []
     if results["ids"] and results["ids"][0]:
         for i, cid in enumerate(results["ids"][0]):

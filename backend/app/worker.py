@@ -13,7 +13,8 @@ from app.services.embedding_provider import get_embeddings
 from app.services.vector_store import add_chunks, delete_document
 from app.services.trace_service import log_ingestion
 from app.services.vision_service import generate_caption
-from app.models import ImageAssetModel
+from app.services.finance_sections import attach_section_metadata, parse_10k_sections
+from app.models import FilingModel, FilingSectionModel, ImageAssetModel
 
 JOB_MAX_RETRIES = config.JOB_MAX_RETRIES
 STREAM_KEY = "rag:jobs"
@@ -42,6 +43,7 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
         job = db.query(JobModel).filter(JobModel.id == job_id).first()
         doc = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
         settings = db.query(SettingsModel).first()
+        filing = db.query(FilingModel).filter(FilingModel.document_id == document_id).first()
         embedding_provider = (settings.embedding_provider if settings else None) or config.DEFAULT_EMBEDDING_PROVIDER
         embed_model = (settings.embed_model if settings else None) or config.DEFAULT_EMBED_MODEL
         vision_model = (settings.vision_model if settings else None) or config.VISION_MODEL
@@ -58,6 +60,12 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
         doc_data = load_document_v2(file_path)
         text = doc_data["text"]
         image_assets = doc_data.get("images", [])
+        filing_sections = parse_10k_sections(text) if filing and filing.filing_type == "10-K" else []
+        if filing:
+            db.query(FilingSectionModel).filter(FilingSectionModel.filing_id == filing.id).delete()
+            for section in filing_sections:
+                db.add(FilingSectionModel(filing_id=filing.id, **section))
+            db.commit()
         stages.append({
             "stage": "load",
             "duration_ms": round((time.time() - t0) * 1000, 2),
@@ -111,18 +119,25 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
             page_map = _build_page_map(text)
             chunks = split_text_v2(text, page_map=page_map)
         else:
-            chunks = split_text(text)
+            chunks = split_text_v2(text) if filing_sections else split_text(text)
+        if filing_sections:
+            chunks = attach_section_metadata(chunks, filing_sections)
         stages.append({
             "stage": "split",
             "duration_ms": round((time.time() - t0) * 1000, 2),
             "chunk_count": len(chunks),
         })
 
+        if not chunks and image_asset_records:
+            chunks = _chunks_from_image_captions(image_asset_records)
+
         if not chunks and not image_asset_records:
             raise ValueError("文档内容为空，无法切片")
 
         # 4.5. 关联图片到 chunks
         image_asset_map = _associate_images_to_chunks(chunks, image_asset_records)
+        _persist_image_chunk_bindings(db, image_asset_map)
+        _append_image_captions_to_chunks(chunks, image_asset_map)
 
         if chunks:
             # 5. Embedding
@@ -150,6 +165,7 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
                 embedding_provider=embedding_provider,
                 embedding_model=embed_model,
                 image_asset_map=image_asset_map,
+                extra_metadata=_filing_vector_metadata(filing) if filing else None,
             )
             stages.append({"stage": "index", "duration_ms": round((time.time() - t0) * 1000, 2)})
         else:
@@ -234,6 +250,60 @@ def _associate_images_to_chunks(
             "source_page": src_page,
         })
     return mapping
+
+
+def _chunks_from_image_captions(image_assets: list[dict]) -> list[dict]:
+    chunks = []
+    for idx, img in enumerate(image_assets):
+        caption = img.get("caption") or f"图片文件 {img['filename']}，暂无可用视觉描述。"
+        chunks.append({
+            "chunk_id": f"chunk-{idx:04d}",
+            "content": f"[图片资产: {img['filename']}]\n{caption}",
+            "metadata": {
+                "chunk_index": idx,
+                "char_count": len(caption),
+                "section_item": "IMAGE",
+                "section_title": "Standalone Image",
+            },
+        })
+    return chunks
+
+
+def _append_image_captions_to_chunks(chunks: list[dict], image_asset_map: dict[int, list[dict]]) -> None:
+    for chunk in chunks:
+        idx = chunk.get("metadata", {}).get("chunk_index")
+        refs = image_asset_map.get(idx, [])
+        captions = [r.get("caption") for r in refs if r.get("caption")]
+        if captions:
+            chunk["content"] = (
+                chunk["content"].rstrip()
+                + "\n\n[关联图片描述]\n"
+                + "\n".join(f"- {caption}" for caption in captions)
+            )
+
+
+def _persist_image_chunk_bindings(db, image_asset_map: dict[int, list[dict]]) -> None:
+    for chunk_idx, refs in image_asset_map.items():
+        chunk_id = f"chunk-{chunk_idx:04d}"
+        for ref in refs:
+            asset = db.query(ImageAssetModel).filter(ImageAssetModel.id == ref["asset_id"]).first()
+            if not asset:
+                continue
+            existing = set(asset.associated_chunks or [])
+            existing.add(chunk_id)
+            asset.associated_chunks = sorted(existing)
+    db.commit()
+
+
+def _filing_vector_metadata(filing: FilingModel) -> dict:
+    return {
+        "filing_id": filing.id,
+        "company_id": filing.company_id,
+        "workspace_id": filing.workspace_id,
+        "company_ticker": filing.company.ticker if filing.company else None,
+        "fiscal_year": filing.fiscal_year,
+        "filing_type": filing.filing_type,
+    }
 
 
 def main():

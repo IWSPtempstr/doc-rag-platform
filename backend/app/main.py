@@ -5,8 +5,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.db import engine, Base, ensure_sqlite_schema
-from app.models import DocumentModel, JobModel, ChatSessionModel, ChatMessageModel, SettingsModel, CollectionModel, EvaluationRunModel
-from app.routers import documents, jobs, chat, settings, health, traces, evaluations, collections
+from app.models import (
+    DocumentModel, JobModel, ChatSessionModel, ChatMessageModel,
+    SettingsModel, CollectionModel, EvaluationRunModel,
+    # v3 finance models
+    UserModel, WorkspaceModel, MembershipModel,
+    CompanyModel, FilingModel, FilingSectionModel, FinancialFactModel,
+    AgentRunModel, AgentStepModel, AgentArtifactModel,
+    EvalDatasetModel, EvalCaseModel, EvalResultModel,
+    ImageAssetModel,
+)
+from app.routers import documents, jobs, chat, settings, health, traces, evaluations, collections, auth, finance
 from app.config import config
 
 # 创建目录
@@ -47,6 +56,8 @@ app.include_router(health.router)
 app.include_router(traces.router)
 app.include_router(evaluations.router)
 app.include_router(collections.router)
+app.include_router(auth.router)
+app.include_router(finance.router)
 
 # v2.0: static file serving for extracted image assets
 app.mount("/api/assets", StaticFiles(directory=config.ASSETS_DIR), name="assets")

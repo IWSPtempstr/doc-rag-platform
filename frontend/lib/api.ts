@@ -2,6 +2,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });
@@ -68,4 +69,32 @@ export const api = {
 
   // Collections
   listCollections: () => request("/collections"),
+
+  // Auth
+  login: (email: string, password: string, name?: string) =>
+    request("/auth/login", { method: "POST", body: JSON.stringify({ email, password, name }) }),
+  logout: () => request("/auth/logout", { method: "POST" }),
+  me: () => request("/auth/me"),
+
+  // Finance
+  listCompanies: (workspace_id = 1) => request(`/finance/companies?workspace_id=${workspace_id}`),
+  createCompany: (data: object) =>
+    request("/finance/companies", { method: "POST", body: JSON.stringify(data) }),
+  getCompany: (ticker: string, workspace_id = 1) =>
+    request(`/finance/companies/${encodeURIComponent(ticker)}?workspace_id=${workspace_id}`),
+  importFiling: (ticker: string, data: object) =>
+    request(`/finance/companies/${encodeURIComponent(ticker)}/filings/import`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getFiling: (id: number) => request(`/finance/filings/${id}`),
+  getFilingSections: (id: number) => request(`/finance/filings/${id}/sections`),
+  bindFilingDocument: (id: number, data: object) =>
+    request(`/finance/filings/${id}/bind-document`, { method: "POST", body: JSON.stringify(data) }),
+  queryFinanceAgent: (data: object) =>
+    request("/finance/agent/query", { method: "POST", body: JSON.stringify(data) }),
+  runFinanceEvaluation: (data: object) =>
+    request("/finance/evaluations/run", { method: "POST", body: JSON.stringify(data) }),
+  listFinanceEvaluationResults: (workspace_id = 1) =>
+    request(`/finance/evaluations/results?workspace_id=${workspace_id}`),
 };

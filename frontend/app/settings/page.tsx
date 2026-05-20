@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+import { colors, radius, shadow, font, btnPrimary, inputBase, card } from "@/lib/styles";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<any>({
@@ -22,44 +23,69 @@ export default function SettingsPage() {
   const handleSave = async () => {
     await api.updateSettings(settings);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setTimeout(() => setSaved(false), 2500);
   };
 
   const update = (key: string, value: any) => setSettings((s: any) => ({ ...s, [key]: value }));
 
+  const selectStyle: React.CSSProperties = { ...inputBase, width: "100%", cursor: "pointer", color: colors.text };
+
   return (
     <div>
-      <h1>模型设置</h1>
-      <div style={{ background: "#fff", borderRadius: 8, padding: 24, boxShadow: "0 1px 3px rgba(0,0,0,0.1)", maxWidth: 480 }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: font.xxl, fontWeight: 700, margin: 0 }}>模型设置</h1>
+        <p style={{ fontSize: font.sm, color: colors.textSecondary, margin: "4px 0 0" }}>
+          配置 Chat 和 Embedding Provider
+        </p>
+      </div>
+
+      <div style={{ ...card, maxWidth: 520, padding: 24 }}>
         <Field label="Chat Provider">
           <select value={settings.chat_provider || settings.provider} onChange={(e) => {
             update("chat_provider", e.target.value);
             update("provider", e.target.value);
-          }} style={inputStyle}>
+          }} style={selectStyle}>
             <option value="openai">OpenAI / Compatible</option>
             <option value="ollama">Ollama</option>
           </select>
         </Field>
+
         <Field label="Embedding Provider">
-          <select value={settings.embedding_provider} onChange={(e) => update("embedding_provider", e.target.value)} style={inputStyle}>
+          <select value={settings.embedding_provider} onChange={(e) => update("embedding_provider", e.target.value)} style={selectStyle}>
             <option value="ollama">Ollama</option>
             <option value="openai">OpenAI / Compatible</option>
           </select>
         </Field>
+
         <Field label="Chat Model">
-          <input value={settings.chat_model} onChange={(e) => update("chat_model", e.target.value)} style={inputStyle} placeholder="deepseek-v4-flash" />
+          <input value={settings.chat_model} onChange={(e) => update("chat_model", e.target.value)}
+            style={{ ...inputBase, width: "100%" }} placeholder="deepseek-v4-flash" />
         </Field>
+
         <Field label="Embed Model">
-          <input value={settings.embed_model} onChange={(e) => update("embed_model", e.target.value)} style={inputStyle} placeholder="nomic-embed-text" />
+          <input value={settings.embed_model} onChange={(e) => update("embed_model", e.target.value)}
+            style={{ ...inputBase, width: "100%" }} placeholder="nomic-embed-text" />
         </Field>
+
         <Field label="Top K">
-          <input type="number" value={settings.top_k} onChange={(e) => update("top_k", parseInt(e.target.value) || 5)} style={inputStyle} min={1} max={50} />
+          <input type="number" value={settings.top_k} onChange={(e) => update("top_k", parseInt(e.target.value) || 5)}
+            style={{ ...inputBase, width: 100 }} min={1} max={50} />
         </Field>
+
         <Field label="Stream">
-          <input type="checkbox" checked={settings.stream} onChange={(e) => update("stream", e.target.checked)} />
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: font.sm }}>
+            <input type="checkbox" checked={settings.stream} onChange={(e) => update("stream", e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: colors.primary }} />
+            启用流式输出
+          </label>
         </Field>
-        <button onClick={handleSave} style={{ padding: "10px 28px", background: saved ? "#4caf50" : "#1a1a2e", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-          {saved ? "已保存" : "保存设置"}
+
+        <button onClick={handleSave} style={{
+          ...btnPrimary, padding: "10px 32px", marginTop: 8,
+          background: saved ? colors.success : colors.primary,
+          transition: "background 0.2s",
+        }}>
+          {saved ? "✓ 已保存" : "保存设置"}
         </button>
       </div>
     </div>
@@ -67,10 +93,8 @@ export default function SettingsPage() {
 }
 
 const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div style={{ marginBottom: 16 }}>
-    <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6, color: "#555" }}>{label}</label>
+  <div style={{ marginBottom: 18 }}>
+    <label style={{ display: "block", fontSize: font.xs, fontWeight: 600, marginBottom: 6, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: "0.3px" }}>{label}</label>
     {children}
   </div>
 );
-
-const inputStyle: React.CSSProperties = { width: "100%", padding: "8px 12px", borderRadius: 4, border: "1px solid #ccc", fontSize: 14, boxSizing: "border-box" };

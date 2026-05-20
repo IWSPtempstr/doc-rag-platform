@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { Document, DocumentChunk, ImageAsset, Job } from "@/lib/types";
+import { colors, radius, shadow, font, badge, btnPrimary, btnDanger, btnGhost, inputBase, card } from "@/lib/styles";
 
 export default function DocumentDetailPage() {
   const params = useParams();
@@ -36,7 +37,6 @@ export default function DocumentDetailPage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Poll while processing
   useEffect(() => {
     if (!doc || doc.status !== "processing") return;
     const t = setInterval(loadAll, 3000);
@@ -70,108 +70,125 @@ export default function DocumentDetailPage() {
     router.push("/documents");
   };
 
-  const statusColor = (s: string) => {
-    switch (s) {
-      case "completed": return "#4caf50";
-      case "processing": return "#ff9800";
-      case "failed": return "#f44336";
-      default: return "#999";
-    }
-  };
-
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  };
-
-  if (!doc) return <div style={{ padding: 24, color: "#999" }}>加载中...</div>;
+  if (!doc) return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 200 }}>
+      <span style={{ color: colors.textMuted, fontSize: font.md }}>加载中...</span>
+    </div>
+  );
 
   const latestJob = jobs.length > 0 ? jobs[0] : null;
   const latestJobProgress = latestJob?.progress;
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <a onClick={() => router.push("/documents")} style={{ color: "#1976d2", cursor: "pointer", fontSize: 14 }}>
+      {/* Header */}
+      <div style={{ marginBottom: 20 }}>
+        <a onClick={() => router.push("/documents")}
+          style={{ color: colors.accent, cursor: "pointer", fontSize: font.sm, fontWeight: 500, textDecoration: "none" }}>
           &larr; 返回文档列表
         </a>
+        <h1 style={{ fontSize: font.xxl, fontWeight: 700, margin: "12px 0 0" }}>{doc.filename}</h1>
       </div>
 
       {message && (
-        <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 4,
-          background: message.includes("失败") ? "#ffebee" : "#e8f5e9",
-          color: message.includes("失败") ? "#c62828" : "#2e7d32", fontSize: 14 }}>
-          {message}
-        </div>
+        <div style={{
+          marginBottom: 12, padding: "10px 16px", borderRadius: radius.sm, fontSize: font.sm,
+          background: message.includes("失败") ? "#fef2f2" : "#ecfdf5",
+          color: message.includes("失败") ? colors.danger : colors.success,
+          border: `1px solid ${message.includes("失败") ? "#fecaca" : "#a7f3d0"}`,
+        }}>{message}</div>
       )}
 
       {/* Metadata Card */}
-      <div style={cardStyle}>
-        <h2 style={{ margin: "0 0 16px 0" }}>文档信息</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+      <div style={card}>
+        <h2 style={{ margin: "0 0 16px 0", fontSize: font.lg, fontWeight: 600 }}>文档信息</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
           <Field label="文件名" value={editFilename} onChange={setEditFilename} />
           <Field label="标签" value={editTags} onChange={setEditTags} />
           <ReadOnly label="类型" value={doc.content_type} />
           <ReadOnly label="大小" value={formatSize(doc.size_bytes)} />
-          <ReadOnly label="状态" value={<span style={{ color: statusColor(doc.status), fontWeight: 600 }}>{doc.status}</span>} />
+          <ReadOnly label="状态" value={<span style={badge(doc.status)}>{doc.status}</span>} />
           <ReadOnly label="Chunks" value={String(doc.chunk_count)} />
           <ReadOnly label="图片数" value={String(doc.image_count)} />
           <ReadOnly label="版本" value={`v${doc.kb_version}`} />
           <ReadOnly label="创建时间" value={new Date(doc.created_at).toLocaleString()} />
         </div>
-        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+        <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
           <button onClick={handleSaveMeta} style={btnPrimary}>保存修改</button>
-          <button onClick={handleReindex} style={btnWarn}>重新索引</button>
+          <button onClick={handleReindex} style={{ ...btnGhost, color: colors.warn, borderColor: "#fcd34d" }}>重新索引</button>
           <button onClick={handleDelete} style={btnDanger}>删除文档</button>
         </div>
       </div>
 
       {/* Latest Job Card */}
       {latestJob && (
-        <div style={cardStyle}>
-          <h3 style={{ margin: "0 0 8px 0" }}>
+        <div style={card}>
+          <h3 style={{ margin: "0 0 12px 0", fontSize: font.md, fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}>
             最近任务: {latestJob.type}
-            <span style={{ color: statusColor(latestJob.status), marginLeft: 8 }}>
-              {latestJob.status}
-            </span>
+            <span style={badge(latestJob.status)}>{latestJob.status}</span>
           </h3>
           {latestJobProgress && (
             <div>
-              <div style={{ fontSize: 13, color: "#666" }}>
+              <div style={{ fontSize: font.sm, color: colors.textSecondary, marginBottom: 8 }}>
                 阶段: {latestJobProgress.stage} — {latestJobProgress.message}
               </div>
               {latestJob.status === "processing" && (
-                <div style={{ marginTop: 4, height: 4, background: "#e0e0e0", borderRadius: 2 }}>
-                  <div style={{ height: 4, background: "#ff9800", borderRadius: 2, width: "60%" }} />
+                <div style={{ height: 6, background: colors.border, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{
+                    height: 6, background: colors.warn, borderRadius: 3,
+                    width: "60%", transition: "width 1s ease",
+                  }} />
                 </div>
               )}
             </div>
           )}
-          {latestJob.error && <div style={{ color: "#f44336", fontSize: 13, marginTop: 4 }}>错误: {latestJob.error}</div>}
+          {latestJob.error && (
+            <div style={{ color: colors.danger, fontSize: font.sm, marginTop: 8, padding: "8px 12px", background: "#fef2f2", borderRadius: radius.sm }}>
+              错误: {latestJob.error}
+            </div>
+          )}
         </div>
       )}
 
       {/* Chunks Section */}
-      <div style={cardStyle}>
-        <h3 style={{ margin: "0 0 12px 0" }}>Chunks ({chunks.length})</h3>
-        {chunks.length === 0 && <div style={{ color: "#999", fontSize: 14 }}>暂无 chunks</div>}
+      <div style={card}>
+        <h3 style={{ margin: "0 0 14px 0", fontSize: font.md, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          Chunks
+          <span style={{ fontSize: font.xs, color: colors.textMuted, fontWeight: 400 }}>({chunks.length})</span>
+        </h3>
+        {chunks.length === 0 && (
+          <div style={{ color: colors.textMuted, fontSize: font.sm, textAlign: "center", padding: 32 }}>暂无 chunks</div>
+        )}
         {chunks.map((c) => (
-          <details key={c.chunk_id} style={{ marginBottom: 8, border: "1px solid #eee", borderRadius: 6, padding: 10 }}>
-            <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-              {c.chunk_id} — {c.metadata.char_count} 字符
-              {c.metadata.page_range && ` — 第 ${c.metadata.page_range.join(",")} 页`}
-              {c.image_refs.length > 0 && ` — ${c.image_refs.length} 张图片`}
+          <details key={c.chunk_id} style={{
+            marginBottom: 8, border: `1px solid ${colors.border}`, borderRadius: radius.md,
+            background: colors.surface, overflow: "hidden",
+          }}>
+            <summary style={{
+              cursor: "pointer", fontSize: font.sm, fontWeight: 600, padding: "10px 14px",
+              background: colors.hover, userSelect: "none",
+            }}>
+              <span style={{ color: colors.textMuted, fontSize: font.xs, marginRight: 8 }}>{c.chunk_id}</span>
+              {c.metadata.char_count} 字符
+              {c.metadata.page_range && <span style={{ marginLeft: 8, color: colors.textSecondary }}>— 第 {c.metadata.page_range.join(",")} 页</span>}
+              {c.image_refs.length > 0 && (
+                <span style={{ marginLeft: 8, color: colors.accent, fontSize: font.xs }}>
+                  — {c.image_refs.length} 张图片
+                </span>
+              )}
             </summary>
-            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, color: "#333", marginTop: 8, background: "#fafafa", padding: 8, borderRadius: 4 }}>
-              {c.content.length > 500 ? c.content.slice(0, 500) + "..." : c.content}
-            </pre>
+            <pre style={{
+              whiteSpace: "pre-wrap", fontSize: font.xs, color: colors.text, margin: 0,
+              padding: "12px 14px", lineHeight: 1.6,
+            }}>{c.content.length > 500 ? c.content.slice(0, 500) + "..." : c.content}</pre>
             {c.image_refs.length > 0 && (
-              <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>关联图片:</div>
+              <div style={{ padding: "0 14px 12px", display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {c.image_refs.map((ref) => (
-                  <span key={ref.asset_id} style={{ display: "inline-block", marginRight: 8, fontSize: 12,
-                    background: "#e3f2fd", padding: "2px 8px", borderRadius: 4 }}>
+                  <span key={ref.asset_id} style={{
+                    display: "inline-block", fontSize: font.xs,
+                    background: "#eff6ff", color: colors.accent, padding: "2px 8px", borderRadius: radius.sm,
+                    border: "1px solid #bfdbfe",
+                  }}>
                     {ref.filename} {ref.caption && `— ${ref.caption.slice(0, 40)}...`}
                   </span>
                 ))}
@@ -182,26 +199,38 @@ export default function DocumentDetailPage() {
       </div>
 
       {/* Assets Section */}
-      <div style={cardStyle}>
-        <h3 style={{ margin: "0 0 12px 0" }}>图片资产 ({assets.length})</h3>
-        {assets.length === 0 && <div style={{ color: "#999", fontSize: 14 }}>暂无图片资产</div>}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
+      <div style={card}>
+        <h3 style={{ margin: "0 0 14px 0", fontSize: font.md, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          图片资产
+          <span style={{ fontSize: font.xs, color: colors.textMuted, fontWeight: 400 }}>({assets.length})</span>
+        </h3>
+        {assets.length === 0 && (
+          <div style={{ color: colors.textMuted, fontSize: font.sm, textAlign: "center", padding: 32 }}>暂无图片资产</div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
           {assets.map((a) => (
-            <div key={a.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, background: "#fafafa" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{a.filename}</div>
-              <div style={{ fontSize: 12, color: "#666" }}>类型: {a.content_type}</div>
-              <div style={{ fontSize: 12, color: "#666" }}>大小: {formatSize(a.size_bytes)}</div>
-              {a.source_page && <div style={{ fontSize: 12, color: "#666" }}>页码: 第 {a.source_page} 页</div>}
+            <div key={a.id} style={{
+              border: `1px solid ${colors.border}`, borderRadius: radius.md, padding: 14,
+              background: colors.hover,
+            }}>
+              <div style={{ fontSize: font.sm, fontWeight: 600, marginBottom: 6, color: colors.text, wordBreak: "break-all" }}>{a.filename}</div>
+              <div style={{ display: "flex", gap: 12, fontSize: font.xs, color: colors.textSecondary, marginBottom: 2 }}>
+                <span>{a.content_type}</span>
+                <span>{formatSize(a.size_bytes)}</span>
+                {a.source_page && <span>第 {a.source_page} 页</span>}
+              </div>
               {a.caption ? (
-                <div style={{ fontSize: 12, color: "#333", marginTop: 6, fontStyle: "italic", background: "#fff", padding: 6, borderRadius: 4 }}>
-                  {a.caption}
-                </div>
+                <div style={{
+                  fontSize: font.xs, color: colors.text, marginTop: 8, fontStyle: "italic",
+                  background: colors.surface, padding: "8px 10px", borderRadius: radius.sm,
+                  border: `1px solid ${colors.borderLight}`, lineHeight: 1.5,
+                }}>{a.caption}</div>
               ) : (
-                <div style={{ fontSize: 12, color: "#999", marginTop: 6 }}>无描述</div>
+                <div style={{ fontSize: font.xs, color: colors.textMuted, marginTop: 8 }}>无描述</div>
               )}
               {a.associated_chunks && a.associated_chunks.length > 0 && (
-                <div style={{ marginTop: 6, fontSize: 11, color: "#888" }}>
-                  关联: {a.associated_chunks.join(", ")}
+                <div style={{ marginTop: 8, fontSize: 10, color: colors.textMuted }}>
+                  关联 chunks: {a.associated_chunks.join(", ")}
                 </div>
               )}
             </div>
@@ -210,16 +239,24 @@ export default function DocumentDetailPage() {
       </div>
 
       {/* Job History */}
-      <div style={cardStyle}>
-        <h3 style={{ margin: "0 0 12px 0" }}>任务历史 ({jobs.length})</h3>
-        {jobs.length === 0 && <div style={{ color: "#999", fontSize: 14 }}>暂无任务记录</div>}
+      <div style={card}>
+        <h3 style={{ margin: "0 0 14px 0", fontSize: font.md, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          任务历史
+          <span style={{ fontSize: font.xs, color: colors.textMuted, fontWeight: 400 }}>({jobs.length})</span>
+        </h3>
+        {jobs.length === 0 && (
+          <div style={{ color: colors.textMuted, fontSize: font.sm, textAlign: "center", padding: 32 }}>暂无任务记录</div>
+        )}
         {jobs.map((j) => (
-          <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid #f0f0f0", fontSize: 13 }}>
-            <span style={{ minWidth: 40 }}>#{j.id}</span>
+          <div key={j.id} style={{
+            display: "flex", alignItems: "center", gap: 14, padding: "10px 0",
+            borderBottom: `1px solid ${colors.borderLight}`, fontSize: font.sm,
+          }}>
+            <span style={{ minWidth: 36, color: colors.textMuted, fontSize: font.xs }}>#{j.id}</span>
             <span style={{ minWidth: 80, fontWeight: 600 }}>{j.type}</span>
-            <span style={{ color: statusColor(j.status), minWidth: 80 }}>{j.status}</span>
-            <span style={{ color: "#999" }}>{new Date(j.created_at).toLocaleString()}</span>
-            {j.error && <span style={{ color: "#f44336", flex: 1 }}>{j.error.slice(0, 80)}</span>}
+            <span style={{ minWidth: 72 }}><span style={badge(j.status)}>{j.status}</span></span>
+            <span style={{ color: colors.textMuted, flex: 1, fontSize: font.xs }}>{new Date(j.created_at).toLocaleString()}</span>
+            {j.error && <span style={{ color: colors.danger, fontSize: font.xs, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.error}</span>}
           </div>
         ))}
       </div>
@@ -227,14 +264,12 @@ export default function DocumentDetailPage() {
   );
 }
 
-/* ---- Helper Components ---- */
-
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#999", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 4, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.3px" }}>{label}</div>
       <input value={value} onChange={(e) => onChange(e.target.value)}
-        style={{ width: "100%", padding: "6px 10px", border: "1px solid #ddd", borderRadius: 4, fontSize: 13, boxSizing: "border-box" }} />
+        style={{ ...inputBase, width: "100%" }} />
     </div>
   );
 }
@@ -242,34 +277,14 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
 function ReadOnly({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "#999", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 13, padding: "6px 0" }}>{value}</div>
+      <div style={{ fontSize: font.xs, color: colors.textMuted, marginBottom: 4, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.3px" }}>{label}</div>
+      <div style={{ fontSize: font.sm, padding: "8px 0" }}>{value}</div>
     </div>
   );
 }
 
-/* ---- Styles ---- */
-
-const cardStyle: React.CSSProperties = {
-  background: "#fff",
-  borderRadius: 8,
-  padding: 20,
-  marginBottom: 16,
-  border: "1px solid #eee",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-};
-
-const btnPrimary: React.CSSProperties = {
-  background: "#1a1a2e", color: "#fff", border: "none",
-  padding: "8px 18px", borderRadius: 4, cursor: "pointer", fontSize: 13,
-};
-
-const btnWarn: React.CSSProperties = {
-  background: "#ff9800", color: "#fff", border: "none",
-  padding: "8px 18px", borderRadius: 4, cursor: "pointer", fontSize: 13,
-};
-
-const btnDanger: React.CSSProperties = {
-  background: "#f44336", color: "#fff", border: "none",
-  padding: "8px 18px", borderRadius: 4, cursor: "pointer", fontSize: 13,
-};
+function formatSize(bytes: number) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
