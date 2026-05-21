@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { ProtectedRoute } from "@/lib/auth";
 import type { EvalCase, EvalDataset, FinanceEvalResult } from "@/lib/types";
-import { colors, font, card, btnPrimary, btnGhost, btnDanger, inputBase, badge } from "@/lib/styles";
+import { colors, font, card, btnPrimary, btnGhost, btnDanger, inputBase } from "@/lib/styles";
 
 export default function FinanceEvaluationsPage() {
   return <ProtectedRoute><FinanceEvaluationsPageInner /></ProtectedRoute>;
@@ -29,9 +29,10 @@ function FinanceEvaluationsPageInner() {
 
   useEffect(() => { loadEval(); loadDatasets(); }, []);
 
-  const loadCases = (dsId: number) => {
+  const loadCases = (dsId: number, statusFilter?: string) => {
     setSelectedDs(dsId);
-    api.getDatasetCases(dsId).then((rows: any) => setCases(rows)).catch(() => setCases([]));
+    const s = statusFilter !== undefined ? statusFilter : caseFilter;
+    api.getDatasetCases(dsId, s || undefined).then((rows: any) => setCases(rows)).catch(() => setCases([]));
   };
 
   const runEval = async () => {
@@ -210,7 +211,7 @@ function FinanceEvaluationsPageInner() {
             <div style={card}>
               <h2 style={{ margin: "0 0 10px", fontSize: font.lg }}>Cases · Dataset #{selectedDs}</h2>
               <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-                <select value={caseFilter} onChange={(e) => { setCaseFilter(e.target.value); loadCases(selectedDs); }}
+                <select value={caseFilter} onChange={(e) => { const v = e.target.value; setCaseFilter(v); if (selectedDs) loadCases(selectedDs, v); }}
                   style={{ ...inputBase, minWidth: 130 }}>
                   <option value="">全部状态</option>
                   <option value="draft">Draft</option>
