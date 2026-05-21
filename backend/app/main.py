@@ -19,7 +19,16 @@ from app.routers import documents, jobs, chat, settings, health, traces, evaluat
 from app.config import config
 
 # 创建目录
-for d in [config.STORAGE_DIR, config.UPLOAD_DIR, config.CHROMA_DIR, config.TRACE_DIR, config.EVAL_DIR, config.ASSETS_DIR]:
+for d in [
+    config.STORAGE_DIR,
+    config.DATA_DIR,
+    config.PUBLIC_DATA_DIR,
+    config.UPLOAD_DIR,
+    config.CHROMA_DIR,
+    config.TRACE_DIR,
+    config.EVAL_DIR,
+    config.ASSETS_DIR,
+]:
     os.makedirs(d, exist_ok=True)
 
 # 建表

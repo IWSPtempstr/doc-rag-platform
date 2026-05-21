@@ -4,6 +4,8 @@ import os
 
 
 class Config:
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
     # Provider
     DEFAULT_CHAT_PROVIDER = os.getenv(
         "CHAT_PROVIDER",
@@ -28,6 +30,8 @@ class Config:
 
     # 存储路径
     STORAGE_DIR = os.getenv("STORAGE_DIR", "storage")
+    DATA_DIR = os.getenv("DATA_DIR", os.path.join(PROJECT_ROOT, "data"))
+    PUBLIC_DATA_DIR = os.getenv("PUBLIC_DATA_DIR", os.path.join(DATA_DIR, "public_datasets"))
     UPLOAD_DIR = os.path.join(STORAGE_DIR, "uploads")
     CHROMA_DIR = os.path.join(STORAGE_DIR, "chroma")
     TRACE_DIR = os.path.join(STORAGE_DIR, "traces")

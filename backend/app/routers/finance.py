@@ -148,7 +148,10 @@ def import_company_filing(
     company = _ensure_company(db, workspace.id, ticker)
     try:
         filing_info = find_10k_filing(company.ticker, year=req.year, accession_number=req.accession_number)
-        downloaded = download_filing_document(filing_info, config.UPLOAD_DIR)
+        downloaded = download_filing_document(
+            filing_info,
+            os.path.join(config.PUBLIC_DATA_DIR, "sec_edgar", "filings"),
+        )
     except Exception as exc:
         raise HTTPException(502, f"SEC EDGAR 导入失败: {exc}") from exc
 

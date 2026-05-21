@@ -1,8 +1,11 @@
 from app.services.finance_dataset_builder import (
     _finqa_case_specs,
+    _public_dataset_cache_path,
     _public_dataset_manifest,
     _tatqa_case_specs,
 )
+from app.config import config
+from app.services.finance_evaluation import _check_fact_grounding
 
 
 def test_finqa_case_specs_preserve_public_metadata_and_numeric_answer():
@@ -62,3 +65,21 @@ def test_public_dataset_manifest_marks_sources_and_license():
     assert manifest["cases_added"] == 4
     assert manifest["skipped"] == 1
     assert manifest["license_note"]
+
+
+def test_fact_grounding_accepts_derived_calculation_inputs():
+    facts = [
+        {"canonical_metric": "Revenues", "value": 100.0},
+        {"canonical_metric": "NetIncomeLoss", "value": 20.0},
+    ]
+    calculations = [{"name": "net_margin", "value": 0.2}]
+    metadata = {"metric_group": "net_margin", "input_metrics": ["Revenues", "NetIncomeLoss"]}
+
+    assert _check_fact_grounding(facts, calculations, metadata, expected=0.2, tolerance=0.01) is True
+
+
+def test_public_dataset_cache_uses_shared_data_directory():
+    cache_path = _public_dataset_cache_path("finqa", "train")
+
+    assert config.DATA_DIR == "/home/work/worktowork/data"
+    assert str(cache_path).startswith("/home/work/worktowork/data/")

@@ -70,6 +70,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
     abstain_correct = 0
     abstain_total = 0
     fact_groundings = 0
+    fact_grounding_total = 0
     evaluated_cases = 0
     skipped_cases = 0
     per_task: dict[str, dict] = {}
@@ -154,8 +155,11 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
         overlap = _evidence_overlap(citations, case.expected_evidence)
 
         # ── fact grounding ──
-        fact_grounded = _check_fact_grounding(facts, metric_group, case.expected_numeric, case.tolerance)
-        if fact_grounded:
+        grounding_applicable = _fact_grounding_applicable(metadata, case.expected_numeric)
+        fact_grounded = _check_fact_grounding(facts, calculations, metadata, case.expected_numeric, case.tolerance)
+        if grounding_applicable:
+            fact_grounding_total += 1
+        if grounding_applicable and fact_grounded:
             fact_groundings += 1
 
         evidence_hits += int(evidence_hit)
@@ -168,6 +172,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
             "answer_preview": answer[:300], "evidence_hit": evidence_hit,
             "numeric_hit": numeric_hit, "evidence_overlap": overlap,
             "fact_grounded": fact_grounded,
+            "fact_grounding_applicable": grounding_applicable,
             "is_abstain": is_abstain, "expects_abstain": expects_abstain,
             "failure_type": _result_failure_type(metadata, citations, overlap, verifier_pass, task_type),
             "verification": verification,
@@ -176,7 +181,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
 
         per_task.setdefault(task_type, {
             "total": 0, "evidence_hits": 0, "numeric_hits": 0, "numeric_total": 0, "overlap_total": 0,
-            "fact_groundings": 0, "abstain_correct": 0, "abstain_total": 0,
+            "fact_groundings": 0, "fact_grounding_total": 0, "abstain_correct": 0, "abstain_total": 0,
         })
         per_task[task_type]["total"] += 1
         per_task[task_type]["evidence_hits"] += int(evidence_hit)
@@ -184,7 +189,9 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
             per_task[task_type]["numeric_hits"] += int(numeric_hit)
             per_task[task_type]["numeric_total"] += 1
         per_task[task_type]["overlap_total"] += overlap
-        per_task[task_type]["fact_groundings"] += int(fact_grounded)
+        if grounding_applicable:
+            per_task[task_type]["fact_grounding_total"] += 1
+            per_task[task_type]["fact_groundings"] += int(fact_grounded)
         if expects_abstain:
             per_task[task_type]["abstain_total"] += 1
             if is_abstain:
@@ -194,7 +201,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
     metrics = {
         "retrieval_hit_rate": round(evidence_hits / total, 4),
         "evidence_recall": round(citation_overlaps / total, 4),
-        "fact_grounding_rate": round(fact_groundings / total, 4),
+        "fact_grounding_rate": round(fact_groundings / max(fact_grounding_total, 1), 4) if fact_grounding_total else None,
         "numeric_accuracy": round(numeric_hits / max(numeric_total, 1), 4) if numeric_total else None,
         "citation_coverage": round(evidence_hits / total, 4),
         "verifier_pass_rate": round(verifier_passes / total, 4),
@@ -202,6 +209,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
         "total_cases": evaluated_cases,
         "skipped_cases": skipped_cases,
         "numeric_cases": numeric_total,
+        "fact_grounding_cases": fact_grounding_total,
         "abstain_cases": abstain_total,
         "abstain_correct": abstain_correct,
         "by_task_type": {
@@ -210,7 +218,7 @@ def run_finance_evaluation(db: Session, workspace_id: int, dataset_name: str, st
                 "retrieval_hit_rate": round(v["evidence_hits"] / max(v["total"], 1), 4),
                 "numeric_accuracy": round(v["numeric_hits"] / max(v["numeric_total"], 1), 4) if v["numeric_total"] else None,
                 "evidence_recall": round(v["overlap_total"] / max(v["total"], 1), 4),
-                "fact_grounding_rate": round(v["fact_groundings"] / max(v["total"], 1), 4),
+                "fact_grounding_rate": round(v["fact_groundings"] / max(v["fact_grounding_total"], 1), 4) if v["fact_grounding_total"] else None,
                 "abstain_accuracy": round(v["abstain_correct"] / max(v["abstain_total"], 1), 4) if v["abstain_total"] else None,
             }
             for k, v in per_task.items()
@@ -261,12 +269,31 @@ def _check_abstain(answer: str, verification: dict) -> bool:
     return any(phrase in answer_lower for phrase in _ABSTAIN_PHRASES)
 
 
-def _check_fact_grounding(facts: list[dict], metric_group: str | None,
+def _fact_grounding_applicable(metadata: dict, expected: float | None) -> bool:
+    return bool(expected is not None and (metadata.get("metric_group") or metadata.get("input_metrics")))
+
+
+def _check_fact_grounding(facts: list[dict], calculations: list[dict], metadata: dict,
                           expected: float | None, tolerance: float | None) -> bool:
-    """Check if agent's canonical facts include the correct metric with a matching value."""
-    if not metric_group or not facts:
+    """Check that numeric answers are grounded in canonical facts or fact-backed calculations."""
+    metric_group = metadata.get("metric_group")
+    input_metrics = metadata.get("input_metrics") or []
+    if not metric_group and not input_metrics:
         return False
     tol = tolerance or 0.01
+    canonical = {
+        (fact.get("canonical_metric") or fact.get("metric") or "").upper(): fact
+        for fact in facts
+    }
+    if input_metrics:
+        if not all(str(metric).upper() in canonical for metric in input_metrics):
+            return False
+        if expected is None:
+            return True
+        return _calculation_matches(calculations, metric_group, expected, tol)
+
+    if not facts:
+        return False
     for fact in facts:
         canon = fact.get("canonical_metric") or ""
         if canon.upper() == metric_group.upper():
@@ -276,6 +303,17 @@ def _check_fact_grounding(facts: list[dict], metric_group: str | None,
                     return True
             elif val is not None:
                 return True  # Has the right metric, even if we can't verify value
+    return False
+
+
+def _calculation_matches(calculations: list[dict], name: str | None, expected: float, tolerance: float) -> bool:
+    threshold = max(tolerance * abs(expected), 1e-6)
+    for calc in calculations:
+        if name and str(calc.get("name", "")).upper() != str(name).upper():
+            continue
+        val = calc.get("value")
+        if val is not None and abs(val - expected) <= threshold:
+            return True
     return False
 
 

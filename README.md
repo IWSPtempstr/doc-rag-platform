@@ -94,6 +94,8 @@ PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/financ
 
 数据集冻结时会保留 approved 且 admissible 的 case。`custom_10k` 会记录 document/chunk/section/fact/chroma 覆盖，并将 `document_not_indexed`、`index_incomplete`、`gold_not_retrievable` 等失败原因留在 case metadata 中。
 
+公开 benchmark 原始文件、FinQA/TAT-QA 派生文档、SEC EDGAR 导入的 10-K 文件统一放在 `/home/work/worktowork/data/public_datasets`。通过 `DATA_DIR` 和 `PUBLIC_DATA_DIR` 可以覆盖该路径。
+
 ### 本地开发
 
 ```bash
@@ -135,6 +137,8 @@ python server.py
 |------|--------|------|
 | DATABASE_URL | sqlite:///./storage/app.db | SQLite 路径 |
 | REDIS_URL | redis://localhost:6379/0 | Redis 连接 |
+| DATA_DIR | /home/work/worktowork/data | 公开数据集与派生产物根目录 |
+| PUBLIC_DATA_DIR | /home/work/worktowork/data/public_datasets | FinQA/TAT-QA/FinanceBench 等公开数据缓存 |
 | CHAT_PROVIDER | openai | Chat Provider，支持 openai/ollama |
 | CHAT_API_KEY | (空) | DeepSeek/OpenAI-compatible Chat API Key |
 | CHAT_API_BASE | https://api.openai.com/v1 | Chat API Base |

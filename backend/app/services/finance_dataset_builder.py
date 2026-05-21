@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
@@ -790,24 +791,41 @@ def _table_to_text(table: list[list[Any]]) -> str:
 
 
 def _load_finqa_rows(split: str, limit: int | None) -> list[dict[str, Any]]:
-    import requests
+    cache_path = _public_dataset_cache_path("finqa", split)
+    if cache_path.exists():
+        rows = json.loads(cache_path.read_text(encoding="utf-8"))
+    else:
+        import requests
 
-    url = f"https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/{split}.json"
-    resp = requests.get(url, timeout=120)
-    resp.raise_for_status()
-    rows = resp.json()
+        url = f"https://raw.githubusercontent.com/czyssrs/FinQA/main/dataset/{split}.json"
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        rows = resp.json()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     if limit:
         rows = rows[:limit]
     return rows
 
 
 def _load_tatqa_rows(split: str, limit: int | None) -> list[dict[str, Any]]:
-    from datasets import load_dataset
+    cache_path = _public_dataset_cache_path("tatqa", split)
+    if cache_path.exists():
+        rows = json.loads(cache_path.read_text(encoding="utf-8"))
+    else:
+        from datasets import load_dataset
 
-    ds = load_dataset("next-tat/TAT-QA", split=split)
+        ds = load_dataset("next-tat/TAT-QA", split=split)
+        rows = [dict(row) for row in ds]
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     if limit:
-        ds = ds.select(range(min(limit, len(ds))))
-    return [dict(row) for row in ds]
+        rows = rows[:limit]
+    return rows
+
+
+def _public_dataset_cache_path(source: str, split: str) -> Path:
+    return Path(config.PUBLIC_DATA_DIR) / source / split / f"{source}_{split}.json"
 
 
 def _finqa_case_specs(row: dict[str, Any], split: str, source_row_idx: int) -> list[dict[str, Any]]:
@@ -993,8 +1011,8 @@ def _upsert_public_document(
 
     from app.config import config as app_config
 
-    os.makedirs(app_config.UPLOAD_DIR, exist_ok=True)
-    public_dir = os.path.join(app_config.UPLOAD_DIR, "public_datasets", source, split)
+    os.makedirs(app_config.PUBLIC_DATA_DIR, exist_ok=True)
+    public_dir = os.path.join(app_config.PUBLIC_DATA_DIR, source, split, "documents")
     os.makedirs(public_dir, exist_ok=True)
     stored_path = os.path.join(public_dir, filename)
     with open(stored_path, "w", encoding="utf-8") as f:
