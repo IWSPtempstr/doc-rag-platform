@@ -79,8 +79,8 @@ pip install -r requirements.txt
 # 2. 配置 Chat Provider 与 Embedding Provider
 export CHAT_PROVIDER=openai
 export CHAT_API_KEY=sk-...
-export CHAT_API_BASE=https://api.deepseek.com
-export CHAT_MODEL=deepseek-v4-flash
+export CHAT_API_BASE=https://your-api-endpoint.com
+export CHAT_MODEL=your-chat-model
 export EMBEDDING_PROVIDER=ollama
 export EMBEDDING_MODEL=nomic-embed-text
 export OLLAMA_BASE_URL=http://localhost:11434
@@ -113,7 +113,7 @@ python server.py
 | REDIS_URL | redis://localhost:6379/0 | Redis 连接 |
 | CHAT_PROVIDER | openai | Chat Provider，支持 openai/ollama |
 | CHAT_API_KEY | (空) | DeepSeek/OpenAI-compatible Chat API Key |
-| CHAT_API_BASE | https://api.deepseek.com | Chat API Base |
+| CHAT_API_BASE | https://api.openai.com/v1 | Chat API Base |
 | CHAT_MODEL | deepseek-v4-flash | Chat 模型 |
 | EMBEDDING_PROVIDER | ollama | Embedding Provider，支持 ollama/openai |
 | EMBEDDING_MODEL | nomic-embed-text | Embedding 模型 |
@@ -128,7 +128,7 @@ python server.py
 | JOB_MAX_RETRIES | 3 | 任务最大重试 |
 | VISION_API_KEY | (CHAT_API_KEY) | Vision API Key，用于图片描述生成 |
 | VISION_API_BASE | (CHAT_API_BASE) | Vision API Base |
-| VISION_MODEL | deepseek-v4-pro | Vision 模型（需多模态模型如 gpt-4o） |
+| VISION_MODEL | gpt-4o | Vision 模型（需多模态模型） |
 | DEFAULT_TOP_K | 5 | 检索结果数 |
 | DEFAULT_CHUNK_SIZE | 500 | 切片大小 |
 | DEFAULT_CHUNK_OVERLAP | 50 | 切片重叠 |

@@ -28,10 +28,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
-      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
       - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
-      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -39,8 +39,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - STORAGE_DIR=storage
       - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
-      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
-      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}}
+      - VISION_MODEL=${VISION_MODEL:-gpt-4o}
     depends_on:
       redis:
         condition: service_healthy
@@ -63,10 +63,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
-      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
       - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
-      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -74,8 +74,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - STORAGE_DIR=storage
       - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
-      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
-      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}}
+      - VISION_MODEL=${VISION_MODEL:-gpt-4o}
     depends_on:
       redis:
         condition: service_healthy
@@ -116,10 +116,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CHAT_PROVIDER=${CHAT_PROVIDER:-openai}
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
-      - CHAT_MODEL=${CHAT_MODEL:-deepseek-v4-flash}
+      - CHAT_MODEL=${CHAT_MODEL:-gpt-4o-mini}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
       - CHAT_API_KEY=${CHAT_API_KEY:-${OPENAI_API_KEY:-}}
-      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}
+      - CHAT_API_BASE=${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -127,8 +127,8 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - STORAGE_DIR=storage
       - VISION_API_KEY=${VISION_API_KEY:-${CHAT_API_KEY:-${OPENAI_API_KEY:-}}}
-      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.deepseek.com}}}
-      - VISION_MODEL=${VISION_MODEL:-deepseek-v4-pro}
+      - VISION_API_BASE=${VISION_API_BASE:-${CHAT_API_BASE:-${OPENAI_API_BASE:-https://api.openai.com/v1}}}
+      - VISION_MODEL=${VISION_MODEL:-gpt-4o}
     depends_on:
       redis:
         condition: service_healthy

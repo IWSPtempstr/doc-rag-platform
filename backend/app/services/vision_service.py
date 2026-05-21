@@ -31,7 +31,9 @@ def generate_caption(
 
 
 def _call_vision_api(model: str, image_b64: str, mime_type: str, prompt: str) -> str:
-    base_url = (config.VISION_API_BASE or "https://api.deepseek.com").rstrip("/")
+    if not config.VISION_API_BASE:
+        raise RuntimeError("VISION_API_BASE not configured")
+    base_url = config.VISION_API_BASE.rstrip("/")
     if not config.VISION_API_KEY:
         raise RuntimeError("VISION_API_KEY not configured (fallback: CHAT_API_KEY)")
 
