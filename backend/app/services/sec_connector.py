@@ -167,16 +167,20 @@ def extract_usd_facts(cik: str) -> dict[str, list[dict[str, Any]]]:
     }
     result: dict[str, list[dict]] = {}
     for metric_group, tags in metric_tags.items():
+        merged: dict[int, dict] = {}
         for tag in tags:
             tag_data = us_gaap.get(tag, {})
             entries = tag_data.get("units", {}).get("USD", [])
-            if not entries:
-                continue
-            result[metric_group] = [
-                {"fiscal_year": e.get("fy"), "value": e.get("val"), "tag": tag, "filed": e.get("filed")}
-                for e in entries if e.get("fp") in ("FY", "Q4")
-            ]
-            break
+            for e in entries:
+                if e.get("fp") not in ("FY", "Q4"):
+                    continue
+                fy = e.get("fy")
+                filed = e.get("filed") or ""
+                # Prefer later-filed entry for same fiscal year
+                if fy not in merged or filed > (merged[fy].get("filed") or ""):
+                    merged[fy] = {"fiscal_year": fy, "value": e.get("val"), "tag": tag, "filed": filed}
+        if merged:
+            result[metric_group] = list(merged.values())
     return result
 
 

@@ -104,6 +104,7 @@ export const api = {
     const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
     return request(`/finance/evaluations/results${qs}`);
   },
+  getFinanceSummary: () => request("/finance/summary"),
 
   // Finance Datasets
   listDatasets: () => request("/finance/datasets"),
@@ -120,6 +121,10 @@ export const api = {
     request("/finance/datasets/build/sec-10k", { method: "POST", body: JSON.stringify(data) }),
   importFinancebenchDataset: (data?: object) =>
     request("/finance/datasets/import/financebench", { method: "POST", body: JSON.stringify(data || {}) }),
+  importFinqaDataset: (data?: object) =>
+    request("/finance/datasets/import/finqa", { method: "POST", body: JSON.stringify(data || {}) }),
+  importTatqaDataset: (data?: object) =>
+    request("/finance/datasets/import/tatqa", { method: "POST", body: JSON.stringify(data || {}) }),
   buildCustom10kDataset: () =>
     request("/finance/datasets/build/custom-10k", { method: "POST" }),
   freezeDataset: (datasetId: number) =>

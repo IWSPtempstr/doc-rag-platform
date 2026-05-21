@@ -59,6 +59,8 @@ class Config:
             OLLAMA_EMBED_MODEL if DEFAULT_EMBEDDING_PROVIDER == "ollama" else OPENAI_EMBED_MODEL,
         ),
     )
+    EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "4000"))
 
     # RAG
     DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "5"))

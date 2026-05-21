@@ -1,6 +1,6 @@
-# 文档 RAG 平台 v2.0
+# 财报分析工作台 v2.0
 
-Document Retrieval-Augmented Generation Platform — 一个基于 FastAPI + Next.js + Redis + Chroma + DeepSeek/OpenAI-compatible API + Ollama Embedding 的文档问答平台。
+SEC 10-K + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redis + Chroma + LangGraph MAS 的财报分析工作台。项目主线只使用公开数据：SEC EDGAR 10-K / CompanyFacts、FinQA、TAT-QA；FinanceBench 仅作为非商用许可的补充评测集。
 
 ## 技术栈
 
@@ -29,6 +29,11 @@ Document Retrieval-Augmented Generation Platform — 一个基于 FastAPI + Next
 - 健康检查（SQLite/Redis/Chroma/Provider/Queue）
 
 ### v2.0
+- 财报工作台：SEC EDGAR 10-K 导入、CompanyFacts/XBRL facts、10-K 章节浏览、Agent 分析轨迹
+- 公共数据集闭环：SEC 10-K、Custom 10-K、FinQA、TAT-QA、FinanceBench sample 的导入、冻结、评估
+- 数据治理：source/license/public_data_only/admissibility/failure_reason/coverage 元数据
+- 中心化 LangGraph MAS：Retrieval、Fact Extraction、Calculation、Analysis、Verifier 节点记录 AgentStep
+- Benchmark report：可输出公开数据集、覆盖率、失败原因和最新指标
 - PDF 图片提取：PyMuPDF 提取 PDF 内嵌图片
 - 图片上传：支持 PNG/JPG/GIF/WebP/BMP 作为独立文档
 - Vision 描述生成：调用多模态 Vision API 为图片生成中文描述
@@ -69,6 +74,25 @@ docker compose up
 - 前端：http://localhost:3000
 - 后端 API：http://localhost:8000
 - API 文档：http://localhost:8000/docs
+
+## 公开数据 Demo 流程
+
+```bash
+cd workspace
+set -a; source .env; set +a
+
+# 后端、worker、前端启动后，在 /finance/evaluations 页面依次执行：
+# 1. 导入 SEC 10-K 或绑定本地 10-K 文档
+# 2. 构建 SEC 10-K 数据集
+# 3. 生成自建 10-K Cases
+# 4. 导入 FinQA Sample / TAT-QA Sample
+# 5. 冻结数据集后运行评估
+
+# 生成报告
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/finance_benchmark_report.py --workspace-id 1
+```
+
+数据集冻结时会保留 approved 且 admissible 的 case。`custom_10k` 会记录 document/chunk/section/fact/chroma 覆盖，并将 `document_not_indexed`、`index_incomplete`、`gold_not_retrievable` 等失败原因留在 case metadata 中。
 
 ### 本地开发
 
@@ -129,6 +153,8 @@ python server.py
 | VISION_API_KEY | (CHAT_API_KEY) | Vision API Key，用于图片描述生成 |
 | VISION_API_BASE | (CHAT_API_BASE) | Vision API Base |
 | VISION_MODEL | gpt-4o | Vision 模型（需多模态模型） |
+| AUTH_SECRET | change-me-in-production | HTTP-only JWT cookie 签名密钥 |
+| SEC_USER_AGENT | FinancialRAGWorkbench/0.1 your-email@example.com | SEC EDGAR 请求必须配置的 User-Agent |
 | DEFAULT_TOP_K | 5 | 检索结果数 |
 | DEFAULT_CHUNK_SIZE | 500 | 切片大小 |
 | DEFAULT_CHUNK_OVERLAP | 50 | 切片重叠 |
@@ -173,6 +199,31 @@ python server.py
 | GET | /api/documents/{id}/jobs | 文档任务历史 |
 | GET | /api/assets/{path} | 图片静态文件（从 storage/assets 挂载） |
 
+### 财报工作台
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/auth/login | 登录并写入 HTTP-only cookie |
+| POST | /api/auth/logout | 退出登录 |
+| GET | /api/auth/me | 当前用户与工作空间 |
+| GET | /api/finance/summary | 财报工作台总览：公司、filings、数据集、失败原因 |
+| GET | /api/finance/companies | 公司列表 |
+| POST | /api/finance/companies | 新建公司 |
+| POST | /api/finance/companies/{ticker}/filings/import | 从 SEC EDGAR 导入 10-K |
+| GET | /api/finance/filings/{filing_id} | filing 详情 |
+| GET | /api/finance/filings/{filing_id}/sections | 10-K 章节切分结果 |
+| POST | /api/finance/filings/{filing_id}/bind-document | 绑定本地上传的财报文档 |
+| POST | /api/finance/agent/query | 中心化 LangGraph MAS 分析 |
+| POST | /api/finance/evaluations/run | 运行公开数据集评估 |
+| GET | /api/finance/evaluations/results | 评估结果列表 |
+| GET | /api/finance/datasets | 数据集列表 |
+| POST | /api/finance/datasets/build/sec-10k | 构建 SEC 10-K 基准 |
+| POST | /api/finance/datasets/build/custom-10k | 构建自建 10-K cases |
+| POST | /api/finance/datasets/import/finqa | 导入 FinQA sample |
+| POST | /api/finance/datasets/import/tatqa | 导入 TAT-QA sample |
+| POST | /api/finance/datasets/import/financebench | 导入 FinanceBench sample |
+| POST | /api/finance/datasets/{dataset_id}/freeze | 冻结数据集 |
+
 ### v1.1
 
 | 方法 | 路径 | 说明 |
@@ -183,6 +234,11 @@ python server.py
 | GET | /api/traces/query | Query trace |
 | POST | /api/evaluations/run | 运行评估 |
 | GET | /api/evaluations/results | 评估结果 |
+
+## 评估产物
+
+- `scripts/finance_benchmark_report.py`：从本地 SQLite 生成公开数据集报告（Markdown/JSON）
+- `backend/tests/test_finance_public_datasets.py`：公开数据集导入与 manifest 约束测试
 
 ## MCP 工具
 
@@ -241,8 +297,9 @@ workspace/
 │   │   ├── worker.py            # 异步 Worker
 │   │   ├── routers/             # API 路由
 │   │   │   ├── documents.py, jobs.py, chat.py
-│   │   │   ├── settings.py, health.py
+│   │   │   ├── settings.py, health.py, auth.py
 │   │   │   ├── traces.py, evaluations.py, collections.py
+│   │   │   └── finance.py       # 财报工作台 API
 │   │   └── services/            # 业务服务
 │   │       ├── document_loader.py, splitter.py
 │   │       ├── image_loader.py       # v2.0 PDF/图片提取
@@ -250,6 +307,8 @@ workspace/
 │   │       ├── asset_service.py      # v2.0 图片资产管理
 │   │       ├── embedding_provider.py, vector_store.py
 │   │       ├── retriever.py, rag_service.py
+│   │       ├── finance_agent.py, finance_dataset_builder.py, finance_evaluation.py
+│   │       ├── sec_connector.py, finance_sections.py
 │   │       ├── cache_service.py, rate_limit.py
 │   │       ├── trace_service.py, evaluation_service.py
 │   ├── Dockerfile
@@ -257,6 +316,7 @@ workspace/
 ├── frontend/                    # Next.js 前端
 │   ├── app/
 │   │   ├── documents/           # 文档列表 + [id] 详情页
+│   │   ├── finance/             # 财报工作台首页 / 公司 / Agent / 评估
 │   │   ├── chat/                # 问答
 │   │   ├── settings/            # 设置
 │   │   ├── health/              # 健康检查
@@ -266,6 +326,8 @@ workspace/
 │       └── types.ts               # v2.0 TypeScript 类型定义
 ├── mcp/
 │   └── server.py                # MCP server
+├── scripts/
+│   └── finance_benchmark_report.py
 ├── storage/                     # 数据存储
 │   ├── uploads/, chroma/, traces/, evaluations/, assets/
 ├── docker-compose.yml

@@ -1,6 +1,7 @@
 """Embedding Provider — 支持 Ollama 和 OpenAI-compatible API"""
 
 import requests
+import time
 from app.config import config
 
 
@@ -49,16 +50,30 @@ def _openai_headers() -> dict:
 
 def _get_openai_embeddings(texts: list[str], model: str) -> list[list[float]]:
     """OpenAI-compatible embeddings API."""
+    batch_size = max(1, int(getattr(config, "EMBEDDING_BATCH_SIZE", 32)))
+    max_chars = max(1, int(getattr(config, "EMBEDDING_MAX_CHARS", 4000)))
+    texts = [text[:max_chars] for text in texts]
+    embeddings: list[list[float]] = []
     try:
-        resp = requests.post(
-            f"{_openai_base_url()}/embeddings",
-            headers=_openai_headers(),
-            json={"model": model, "input": texts},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return [item["embedding"] for item in data["data"]]
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start:start + batch_size]
+            for attempt in range(3):
+                try:
+                    resp = requests.post(
+                        f"{_openai_base_url()}/embeddings",
+                        headers=_openai_headers(),
+                        json={"model": model, "input": batch},
+                        timeout=120,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    embeddings.extend(item["embedding"] for item in data["data"])
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(1.5 * (attempt + 1))
+        return embeddings
     except Exception as e:
         raise RuntimeError(f"API Embedding 生成失败 (model={model}): {e}")
 

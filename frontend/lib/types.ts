@@ -213,3 +213,24 @@ export interface EvalCase {
   metadata_json: any;
   created_at: string;
 }
+
+export interface FinanceSummary {
+  company_count: number;
+  filing_count: number;
+  dataset_count: number;
+  frozen_dataset_count: number;
+  case_count: number;
+  latest_eval: Record<string, any> | null;
+  dataset_failure_counts: Record<string, number>;
+  datasets: Array<{
+    id: number;
+    name: string;
+    source: string;
+    version: string;
+    case_count: number;
+    frozen_at: string | null;
+    source_url: string | null;
+    license_note: string | null;
+    public_data_only: boolean;
+  }>;
+}

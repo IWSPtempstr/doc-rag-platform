@@ -14,6 +14,7 @@ from app.models import (
     DocumentModel,
     EvalCaseModel,
     EvalDatasetModel,
+    EvalResultModel,
     FilingModel,
     FilingSectionModel,
     JobModel,
@@ -47,7 +48,9 @@ from app.services.finance_dataset_builder import (
     freeze_dataset,
     generate_custom_10k_cases,
     generate_sec_10k_cases,
+    import_finqa,
     import_financebench,
+    import_tatqa,
 )
 from app.services.finance_evaluation import run_finance_evaluation
 from app.services.finance_sections import parse_10k_sections
@@ -298,6 +301,54 @@ def list_eval_results(
     )
 
 
+@router.get("/summary", response_model=dict)
+def finance_summary(
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    datasets = db.query(EvalDatasetModel).filter(EvalDatasetModel.workspace_id == workspace.id).all()
+    companies = db.query(CompanyModel).filter(CompanyModel.workspace_id == workspace.id).all()
+    filings = db.query(FilingModel).filter(FilingModel.workspace_id == workspace.id).all()
+    latest_eval = (
+        db.query(EvalResultModel)
+        .filter(EvalResultModel.workspace_id == workspace.id)
+        .order_by(EvalResultModel.created_at.desc())
+        .first()
+    )
+    failure_counts: dict[str, int] = {}
+    for dataset in datasets:
+        cases = db.query(EvalCaseModel).filter(EvalCaseModel.dataset_id == dataset.id).all()
+        for case in cases:
+            metadata = case.metadata_json or {}
+            reason = metadata.get("failure_reason") or (metadata.get("quality_flags") or {}).get("failure_reason")
+            if reason:
+                failure_counts[reason] = failure_counts.get(reason, 0) + 1
+    return {
+        "company_count": len(companies),
+        "filing_count": len(filings),
+        "dataset_count": len(datasets),
+        "frozen_dataset_count": sum(1 for ds in datasets if ds.frozen_at),
+        "case_count": sum(ds.case_count or 0 for ds in datasets),
+        "latest_eval": latest_eval.metrics if latest_eval else None,
+        "dataset_failure_counts": failure_counts,
+        "datasets": [
+            {
+                "id": ds.id,
+                "name": ds.name,
+                "source": ds.source,
+                "version": ds.version,
+                "case_count": ds.case_count,
+                "frozen_at": ds.frozen_at,
+                "source_url": ds.source_url,
+                "license_note": ds.license_note,
+                "public_data_only": bool((ds.manifest_json or {}).get("public_data_only")),
+            }
+            for ds in datasets
+        ],
+    }
+
+
 # ── Dataset endpoints ──────────────────────────────────────
 
 @router.get("/datasets", response_model=list[EvalDatasetResponse])
@@ -360,6 +411,36 @@ def import_financebench_dataset(
         description="FinanceBench (HuggingFace PatronusAI/financebench), 150 rows",
         source_url="https://huggingface.co/datasets/PatronusAI/financebench", license_note="Apache 2.0")
     return import_financebench(db, ds)
+
+
+@router.post("/datasets/import/finqa")
+def import_finqa_dataset(
+    req: EvalDatasetImportRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    split = req.subset or "train"
+    ds = _ensure_dataset(db, workspace.id, "finqa_sample", "finqa",
+        version=_next_version(db, "finqa_sample"),
+        description=f"FinQA public sample ({split})",
+        source_url="https://huggingface.co/datasets/ibm-research/finqa", license_note="Public academic benchmark source")
+    return import_finqa(db, ds, split=split, limit=req.limit)
+
+
+@router.post("/datasets/import/tatqa")
+def import_tatqa_dataset(
+    req: EvalDatasetImportRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    split = req.subset or "train"
+    ds = _ensure_dataset(db, workspace.id, "tatqa_sample", "tatqa",
+        version=_next_version(db, "tatqa_sample"),
+        description=f"TAT-QA public sample ({split})",
+        source_url="https://huggingface.co/datasets/next-tat/TAT-QA", license_note="Public academic benchmark source")
+    return import_tatqa(db, ds, split=split, limit=req.limit)
 
 
 @router.post("/datasets/build/custom-10k")

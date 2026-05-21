@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ProtectedRoute } from "@/lib/auth";
-import type { Company, FinanceEvalResult } from "@/lib/types";
+import type { Company, FinanceEvalResult, FinanceSummary } from "@/lib/types";
 import { colors, radius, font, card, btnPrimary, inputBase, btnGhost } from "@/lib/styles";
 
 export default function FinanceHomePage() {
@@ -15,6 +15,7 @@ function FinanceHomePageInner() {
   const router = useRouter();
   const [companies, setCompanies] = useState<Company[]>([]);
   const [evals, setEvals] = useState<FinanceEvalResult[]>([]);
+  const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [message, setMessage] = useState("");
@@ -22,6 +23,7 @@ function FinanceHomePageInner() {
   const load = () => {
     api.listCompanies().then((rows: any) => setCompanies(rows)).catch(console.error);
     api.listFinanceEvaluationResults().then((rows: any) => setEvals(rows)).catch(() => setEvals([]));
+    api.getFinanceSummary().then((row: any) => setSummary(row)).catch(() => setSummary(null));
   };
 
   useEffect(() => { load(); }, []);
@@ -117,10 +119,27 @@ function FinanceHomePageInner() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-        <Metric title="公司数" value={String(companies.length)} />
+        <Metric title="公司数" value={String(summary?.company_count ?? companies.length)} />
+        <Metric title="Filings" value={String(summary?.filing_count ?? "-")} />
+        <Metric title="公开数据集" value={String(summary?.dataset_count ?? "-")} />
+        <Metric title="可评估 Cases" value={String(summary?.case_count ?? "-")} />
         <Metric title="最近评估" value={evals[0]?.strategy || "-"} />
-        <Metric title="检索命中率" value={formatMetric(evals[0]?.metrics?.retrieval_hit_rate)} />
+        <Metric title="检索命中率" value={formatMetric(summary?.latest_eval?.retrieval_hit_rate ?? evals[0]?.metrics?.retrieval_hit_rate)} />
       </div>
+
+      {summary && Object.keys(summary.dataset_failure_counts || {}).length > 0 && (
+        <div style={card}>
+          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>阻塞原因</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+            {Object.entries(summary.dataset_failure_counts).map(([reason, count]) => (
+              <div key={reason} style={{ background: colors.hover, borderRadius: 6, padding: "8px 10px" }}>
+                <div style={{ color: colors.textMuted, fontSize: font.xs, wordBreak: "break-word" }}>{reason}</div>
+                <div style={{ fontWeight: 700 }}>{count}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -140,4 +159,3 @@ function formatMetric(value: any) {
 
 const th: React.CSSProperties = { textAlign: "left", padding: "10px", fontSize: font.xs, color: colors.textMuted };
 const td: React.CSSProperties = { padding: "10px", fontSize: font.sm };
-

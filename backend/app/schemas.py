@@ -354,7 +354,8 @@ class EvalDatasetBuildRequest(BaseModel):
 class EvalDatasetImportRequest(BaseModel):
     source: str = "huggingface"
     dataset_path: str = "PatronusAI/financebench"
-    subset: str = "financebench_v1"
+    subset: str = "train"
+    limit: Optional[int] = 50
 
 
 class EvalDatasetResponse(BaseModel):

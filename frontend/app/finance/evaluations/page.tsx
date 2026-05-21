@@ -55,6 +55,8 @@ function FinanceEvaluationsPageInner() {
     try {
       if (action === "sec") await api.buildSec10kDataset({});
       else if (action === "fb") await api.importFinancebenchDataset();
+      else if (action === "finqa") await api.importFinqaDataset({ subset: "train", limit: 25 });
+      else if (action === "tatqa") await api.importTatqaDataset({ subset: "train", limit: 25 });
       else if (action === "custom") await api.buildCustom10kDataset();
       setMessage(`${action} 构建完成`);
       loadDatasets();
@@ -111,6 +113,8 @@ function FinanceEvaluationsPageInner() {
               <select value={dataset} onChange={(e) => setDataset(e.target.value)} style={{ ...inputBase, minWidth: 180 }}>
                 <option value="custom_10k">Custom 10-K</option>
                 <option value="sec_10k">SEC 10-K</option>
+                <option value="finqa">FinQA</option>
+                <option value="tatqa">TAT-QA</option>
                 <option value="financebench_sample_all">FinanceBench</option>
               </select>
               <button onClick={runEval} disabled={running} style={{ ...btnPrimary, opacity: running ? 0.6 : 1 }}>
@@ -130,13 +134,60 @@ function FinanceEvaluationsPageInner() {
                   <span style={{ color: colors.textMuted, fontSize: font.xs }}>{new Date(result.created_at).toLocaleString()}</span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginTop: 10 }}>
-                  {Object.entries(result.metrics || {}).map(([key, value]) => (
-                    <div key={key} style={{ background: colors.hover, borderRadius: 6, padding: "8px 10px" }}>
-                      <div style={{ color: colors.textMuted, fontSize: font.xs }}>{key}</div>
-                      <div style={{ fontWeight: 700 }}>{typeof value === "number" ? value.toFixed(4) : String(value)}</div>
-                    </div>
-                  ))}
+                  {Object.entries(result.metrics || {})
+                    .filter(([, value]) => value === null || typeof value !== "object" || Array.isArray(value))
+                    .map(([key, value]) => (
+                      <div key={key} style={{ background: colors.hover, borderRadius: 6, padding: "8px 10px" }}>
+                        <div style={{ color: colors.textMuted, fontSize: font.xs }}>{key}</div>
+                        <div style={{ fontWeight: 700 }}>{renderMetricValue(value)}</div>
+                      </div>
+                    ))}
                 </div>
+                {result.results?.length ? (
+                  <div style={{ marginTop: 12, background: colors.hover, borderRadius: 6, padding: 10 }}>
+                    <div style={{ color: colors.textSecondary, fontSize: font.sm, fontWeight: 700, marginBottom: 6 }}>failure_type</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {Object.entries(groupFailures(result.results)).map(([key, value]) => (
+                        <span key={key} style={{ fontSize: font.xs, color: colors.textSecondary }}>
+                          {key}: {String(value)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {result.metrics?.by_task_type && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ color: colors.textSecondary, fontSize: font.sm, fontWeight: 700, marginBottom: 8 }}>by_task_type</div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
+                            <th style={th}>task_type</th>
+                            <th style={th}>total</th>
+                            <th style={th}>retrieval_hit_rate</th>
+                            <th style={th}>numeric_accuracy</th>
+                            <th style={th}>evidence_recall</th>
+                            <th style={th}>fact_grounding_rate</th>
+                            <th style={th}>abstain_accuracy</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(result.metrics.by_task_type).map(([taskType, stats]: [string, any]) => (
+                            <tr key={taskType} style={{ borderBottom: `1px solid ${colors.borderLight}` }}>
+                              <td style={td}>{taskType}</td>
+                              <td style={td}>{stats.total ?? "-"}</td>
+                              <td style={td}>{renderMetricValue(stats.retrieval_hit_rate)}</td>
+                              <td style={td}>{renderMetricValue(stats.numeric_accuracy)}</td>
+                              <td style={td}>{renderMetricValue(stats.evidence_recall)}</td>
+                              <td style={td}>{renderMetricValue(stats.fact_grounding_rate)}</td>
+                              <td style={td}>{renderMetricValue(stats.abstain_accuracy)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -153,6 +204,12 @@ function FinanceEvaluationsPageInner() {
               </button>
               <button onClick={() => buildDataset("fb")} disabled={dsLoading} style={btnPrimary}>
                 导入 FinanceBench Sample
+              </button>
+              <button onClick={() => buildDataset("finqa")} disabled={dsLoading} style={btnPrimary}>
+                导入 FinQA Sample
+              </button>
+              <button onClick={() => buildDataset("tatqa")} disabled={dsLoading} style={btnPrimary}>
+                导入 TAT-QA Sample
               </button>
               <button onClick={() => buildDataset("custom")} disabled={dsLoading} style={btnGhost}>
                 生成自建 10-K Cases
@@ -193,6 +250,8 @@ function FinanceEvaluationsPageInner() {
                           ? <span style={{ color: colors.success, fontWeight: 600 }}>Frozen</span>
                           : <span style={{ color: colors.textMuted }}>Active</span>
                         }
+                        {ds.license_note && <div style={{ color: colors.textMuted, fontSize: font.xs }}>{ds.license_note}</div>}
+                        {ds.source_url && <div style={{ color: colors.textMuted, fontSize: font.xs, wordBreak: "break-word" }}>{ds.source_url}</div>}
                       </td>
                       <td style={td}>
                         <button onClick={() => loadCases(ds.id)} style={{ ...btnGhost, marginRight: 6 }}>查看</button>
@@ -262,3 +321,18 @@ function FinanceEvaluationsPageInner() {
 
 const th: React.CSSProperties = { textAlign: "left", padding: "10px", fontSize: font.xs, color: colors.textMuted, fontWeight: 600 };
 const td: React.CSSProperties = { padding: "10px", fontSize: font.sm };
+
+function renderMetricValue(value: any) {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "number") return value.toFixed(4);
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function groupFailures(results: any[]) {
+  return results.reduce((acc: Record<string, number>, item) => {
+    const key = item.failure_type || (item.skipped ? "skipped" : "ok");
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
