@@ -1,6 +1,6 @@
-# 财报分析工作台 v2.0
+# 财报分析工作台 v2.1
 
-SEC 10-K + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redis + Chroma + LangGraph MAS 的财报分析工作台。项目主线只使用公开数据：SEC EDGAR 10-K / CompanyFacts、FinQA、TAT-QA；FinanceBench 仅作为非商用许可的补充评测集。
+SEC 10-K + A 股公告 + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redis + Chroma + LangGraph MAS + MCP 的财报分析工作台。项目主线使用公开数据：SEC EDGAR 10-K / CompanyFacts、巨潮资讯 CNINFO 公告、FinQA、TAT-QA；FinanceBench 仅作为非商用许可的补充评测集。
 
 ## 技术栈
 
@@ -14,6 +14,7 @@ SEC 10-K + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redi
 | 视觉模型 | OpenAI-compatible Vision API (GPT-4o 等多模态模型) |
 | LLM/Embedding | Chat 使用 DeepSeek/OpenAI-compatible API，Embedding 默认使用本地 Ollama |
 | MCP | Python stdin/stdout JSON-RPC |
+| A 股数据 | CNINFO 公告 connector，AKShare 可选结构化事实/行情 provider |
 
 ## 功能
 
@@ -43,6 +44,15 @@ SEC 10-K + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redi
 - 增强文档列表：搜索、状态筛选、图片筛选、批量操作
 - Docker 健康检查：所有服务（redis/backend/worker/frontend/mcp）添加 healthcheck
 - 持久化卷文档：标注所有 Docker volume 的用途
+
+### v2.1
+- A 股公告 connector：通过 CNINFO 检索公告、定位完整年报、下载 PDF，并标准化为 `Document / Filing / Job`
+- A 股 metadata 入库：`market/source/exchange/stock_code/announcement_id/disclosure_category` 写入 `Filing.metadata_json`
+- A 股索引过滤：worker 将 `market/source/exchange/disclosure_category` 写入 Chroma metadata，retriever 支持 `where` 过滤
+- 结构化事实扩展：新增 `MarketFactModel`，支持 A 股行情事实入库；财务事实可通过 AKShare 同步到 `FinancialFactModel`
+- A 股 MCP 工具：公告搜索、年报定位、公告下载、已入库 filing 查询、行情事实查询
+- 日更脚本：`scripts/ashare_daily_update.py` 支持每日固定时间拉取跟踪公司的最新公告并同步可选行情事实
+- A 股覆盖报告：`scripts/ashare_benchmark_report.py` 输出 A 股 filing、文档、chunk、section、fact、market fact 覆盖情况
 
 ### v1.1
 - Hybrid Search: Dense + BM25 Sparse + RRF Fusion
@@ -96,11 +106,39 @@ PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/financ
 
 公开 benchmark 原始文件、FinQA/TAT-QA 派生文档、SEC EDGAR 导入的 10-K 文件统一放在 `/home/work/worktowork/data/public_datasets`。通过 `DATA_DIR` 和 `PUBLIC_DATA_DIR` 可以覆盖该路径。
 
+## A 股公开数据 Demo 流程
+
+```bash
+cd workspace
+set -a; source .env; set +a
+
+# 1. 在 /finance 添加 6 位 A 股代码，例如 600519
+# 2. 输入年报年份，例如 2023，点击“导入A股年报”
+# 3. worker 完成 ingestion 后，A 股公告 PDF 会进入 Document/Filing/Chroma
+
+# 可选：同步 AKShare 行情事实
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/ashare_daily_update.py \
+  --workspace-id 1 \
+  --tickers 600519 \
+  --lookback-days 30 \
+  --sync-market
+
+# 生成 A 股覆盖报告
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/ashare_benchmark_report.py --workspace-id 1
+```
+
+A 股公告文件默认保存到 `/home/work/worktowork/data/public_datasets/ashare/cninfo/filings`，日更摘要保存到 `/home/work/worktowork/data/public_datasets/ashare/daily_runs`。
+
+当前已创建应用内自动化任务 `a-share-daily-update`，每日 `03:00` 运行 A 股日更脚本。跟踪范围来自已入库的 A 股公司；若没有 A 股公司，脚本会输出空 tickers 的运行摘要。
+
 ### 本地开发
 
 ```bash
 # 1. 安装 Python 依赖
 pip install -r requirements.txt
+
+# 可选：A 股结构化财务事实/行情同步需要 AKShare
+pip install akshare
 
 # 2. 配置 Chat Provider 与 Embedding Provider
 export CHAT_PROVIDER=openai
@@ -159,6 +197,7 @@ python server.py
 | VISION_MODEL | gpt-4o | Vision 模型（需多模态模型） |
 | AUTH_SECRET | change-me-in-production | HTTP-only JWT cookie 签名密钥 |
 | SEC_USER_AGENT | FinancialRAGWorkbench/0.1 your-email@example.com | SEC EDGAR 请求必须配置的 User-Agent |
+| DEFAULT_WORKSPACE_ID | 1 | A 股日更脚本默认 workspace |
 | DEFAULT_TOP_K | 5 | 检索结果数 |
 | DEFAULT_CHUNK_SIZE | 500 | 切片大小 |
 | DEFAULT_CHUNK_OVERLAP | 50 | 切片重叠 |
@@ -214,8 +253,14 @@ python server.py
 | GET | /api/finance/companies | 公司列表 |
 | POST | /api/finance/companies | 新建公司 |
 | POST | /api/finance/companies/{ticker}/filings/import | 从 SEC EDGAR 导入 10-K |
+| GET | /api/finance/ashare/companies/{ticker}/announcements | 从 CNINFO 搜索 A 股公告 |
+| POST | /api/finance/ashare/companies/{ticker}/filings/import | 从 CNINFO 导入 A 股年报公告 PDF |
+| POST | /api/finance/ashare/companies/{ticker}/facts/sync | 通过 AKShare 同步 A 股财务事实 |
+| POST | /api/finance/ashare/companies/{ticker}/market/sync | 通过 AKShare 同步 A 股行情事实 |
+| GET | /api/finance/companies/{ticker}/market-facts | 查询 A 股行情事实 |
 | GET | /api/finance/filings/{filing_id} | filing 详情 |
 | GET | /api/finance/filings/{filing_id}/sections | 10-K 章节切分结果 |
+| GET | /api/finance/filings/{filing_id}/facts | filing 结构化财务事实 |
 | POST | /api/finance/filings/{filing_id}/bind-document | 绑定本地上传的财报文档 |
 | POST | /api/finance/agent/query | 中心化 LangGraph MAS 分析 |
 | POST | /api/finance/evaluations/run | 运行公开数据集评估 |
@@ -242,7 +287,12 @@ python server.py
 ## 评估产物
 
 - `scripts/finance_benchmark_report.py`：从本地 SQLite 生成公开数据集报告（Markdown/JSON）
+- `scripts/ashare_benchmark_report.py`：生成 A 股公告/索引/事实覆盖报告
+- `scripts/ashare_daily_update.py`：A 股公告与行情事实日更脚本
 - `backend/tests/test_finance_public_datasets.py`：公开数据集导入与 manifest 约束测试
+- `backend/tests/test_ashare_connector.py`：CNINFO metadata 归一化、年报筛选、公告类型识别
+- `backend/tests/test_ashare_mcp.py`：A 股 MCP 工具注册与调用
+- `backend/tests/test_ashare_finance_sync.py`：AKShare 财报 period 归一化
 
 ## MCP 工具
 
@@ -253,10 +303,22 @@ python server.py
 | query_knowledge_hub | 通用知识库查询 |
 | list_collections | 列出所有集合 |
 | get_document_summary | 获取文档摘要 |
+| search_ashare_announcements | 搜索 CNINFO A 股公告并返回标准化 metadata |
+| get_ashare_annual_report | 获取指定 A 股公司指定年份的完整年度报告公告 |
+| download_ashare_announcement | 下载标准化公告对象对应的 PDF |
+| get_ashare_filings_by_company | 查询已入库 A 股公司 filings |
+| list_ashare_market_facts | 查询已入库 A 股行情事实 |
 
 ## cURL 示例
 
+财报工作台接口使用 HTTP-only cookie 鉴权。下面的 `finance` 示例假设已先登录并把 cookie 保存到 `/tmp/rag_cookie.txt`。
+
 ```bash
+# 登录
+curl -c /tmp/rag_cookie.txt -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@example.com","password":"demo-password","name":"Demo"}'
+
 # 上传文档
 curl -F "file=@test.pdf" -F "tags=技术文档" http://localhost:8000/api/documents/upload
 
@@ -284,6 +346,22 @@ curl http://localhost:8000/api/documents/1/jobs
 
 # v2.0 查看 chunks（含 image_refs）
 curl http://localhost:8000/api/documents/1/chunks
+
+# A 股：搜索公告
+curl -b /tmp/rag_cookie.txt \
+  "http://localhost:8000/api/finance/ashare/companies/600519/announcements?keyword=2023%E5%B9%B4%E5%B9%B4%E5%BA%A6%E6%8A%A5%E5%91%8A"
+
+# A 股：导入年报
+curl -b /tmp/rag_cookie.txt -X POST http://localhost:8000/api/finance/ashare/companies/600519/filings/import \
+  -H "Content-Type: application/json" \
+  -d '{"fiscal_year": 2023}'
+
+# MCP：列出工具
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | PYTHONPATH=backend python mcp/server.py
+
+# MCP：获取 A 股年报公告
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_ashare_annual_report","arguments":{"ticker":"600519","fiscal_year":2023}}}' \
+  | PYTHONPATH=backend python mcp/server.py
 ```
 
 ## 目录结构
@@ -312,7 +390,8 @@ workspace/
 │   │       ├── embedding_provider.py, vector_store.py
 │   │       ├── retriever.py, rag_service.py
 │   │       ├── finance_agent.py, finance_dataset_builder.py, finance_evaluation.py
-│   │       ├── sec_connector.py, finance_sections.py
+│   │       ├── sec_connector.py, ashare_connector.py, ashare_structured_provider.py
+│   │       ├── finance_sections.py
 │   │       ├── cache_service.py, rate_limit.py
 │   │       ├── trace_service.py, evaluation_service.py
 │   ├── Dockerfile
@@ -331,7 +410,9 @@ workspace/
 ├── mcp/
 │   └── server.py                # MCP server
 ├── scripts/
-│   └── finance_benchmark_report.py
+│   ├── finance_benchmark_report.py
+│   ├── ashare_daily_update.py
+│   └── ashare_benchmark_report.py
 ├── storage/                     # 数据存储
 │   ├── uploads/, chroma/, traces/, evaluations/, assets/
 ├── docker-compose.yml
