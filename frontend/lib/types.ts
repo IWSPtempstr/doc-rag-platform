@@ -178,3 +178,38 @@ export interface FinanceEvalResult {
   results: any;
   created_at: string;
 }
+
+export interface EvalDataset {
+  id: number;
+  workspace_id: number;
+  name: string;
+  source: string;
+  version: string;
+  description: string | null;
+  manifest_json: Record<string, any> | null;
+  case_count: number;
+  frozen_at: string | null;
+  source_url: string | null;
+  license_note: string | null;
+  created_at: string;
+}
+
+export interface EvalCase {
+  id: number;
+  dataset_id: number;
+  case_uid: string | null;
+  question: string;
+  expected_answer: string | null;
+  expected_evidence: any;
+  expected_numeric: number | null;
+  expected_calculation: any;
+  tolerance: number;
+  task_type: string | null;
+  difficulty: string;
+  status: string;
+  gold_filing_id: number | null;
+  gold_document_id: number | null;
+  rubric_json: any;
+  metadata_json: any;
+  created_at: string;
+}

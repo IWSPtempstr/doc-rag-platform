@@ -104,4 +104,24 @@ export const api = {
     const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
     return request(`/finance/evaluations/results${qs}`);
   },
+
+  // Finance Datasets
+  listDatasets: () => request("/finance/datasets"),
+  getDatasetCases: (datasetId: number, status?: string, taskType?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (taskType) params.set("task_type", taskType);
+    const qs = params.toString();
+    return request(`/finance/datasets/${datasetId}/cases${qs ? `?${qs}` : ""}`);
+  },
+  updateEvalCase: (caseId: number, data: object) =>
+    request(`/finance/eval-cases/${caseId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  buildSec10kDataset: (data: object) =>
+    request("/finance/datasets/build/sec-10k", { method: "POST", body: JSON.stringify(data) }),
+  importFinancebenchDataset: (data?: object) =>
+    request("/finance/datasets/import/financebench", { method: "POST", body: JSON.stringify(data || {}) }),
+  buildCustom10kDataset: () =>
+    request("/finance/datasets/build/custom-10k", { method: "POST" }),
+  freezeDataset: (datasetId: number) =>
+    request(`/finance/datasets/${datasetId}/freeze`, { method: "POST" }),
 };

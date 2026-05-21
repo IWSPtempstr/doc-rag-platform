@@ -238,6 +238,11 @@ class EvalDatasetModel(Base):
     source = Column(String(80), default="custom")
     version = Column(String(80), default="v1")
     description = Column(Text, nullable=True)
+    manifest_json = Column(JSON, nullable=True)
+    case_count = Column(Integer, default=0)
+    frozen_at = Column(DateTime, nullable=True)
+    source_url = Column(String(1000), nullable=True)
+    license_note = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
     cases = relationship("EvalCaseModel", back_populates="dataset", cascade="all, delete-orphan")
@@ -248,15 +253,25 @@ class EvalCaseModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     dataset_id = Column(Integer, ForeignKey("eval_datasets.id", ondelete="CASCADE"), nullable=False)
+    case_uid = Column(String(200), nullable=True, index=True)
     question = Column(Text, nullable=False)
     expected_answer = Column(Text, nullable=True)
     expected_evidence = Column(JSON, nullable=True)
     expected_numeric = Column(Float, nullable=True)
+    expected_calculation = Column(JSON, nullable=True)
     tolerance = Column(Float, default=0.01)
+    task_type = Column(String(40), nullable=True)
+    difficulty = Column(String(20), default="medium")
+    status = Column(String(20), default="draft")
+    gold_filing_id = Column(Integer, ForeignKey("filings.id", ondelete="SET NULL"), nullable=True)
+    gold_document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    rubric_json = Column(JSON, nullable=True)
     metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
     dataset = relationship("EvalDatasetModel", back_populates="cases")
+    gold_filing = relationship("FilingModel")
+    gold_document = relationship("DocumentModel")
 
 
 class EvalResultModel(Base):

@@ -140,3 +140,54 @@ def _year_from_date(value: str | None) -> int | None:
     dt = parse_sec_date(value)
     return dt.year if dt else None
 
+
+# ── XBRL Company Facts ─────────────────────────────────────
+
+def fetch_companyfacts(cik: str) -> dict[str, Any]:
+    resp = requests.get(
+        f"{DATA_BASE}/api/xbrl/companyfacts/CIK{_cik10(cik)}.json",
+        headers=_headers(), timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def extract_usd_facts(cik: str) -> dict[str, list[dict[str, Any]]]:
+    """Extract USD-denominated US-GAAP facts per fiscal year for standard metrics."""
+    raw = fetch_companyfacts(cik)
+    us_gaap = raw.get("facts", {}).get("us-gaap", {}) or raw.get("facts", {}).get("ifrs-full", {})
+
+    metric_tags = {
+        "Revenues": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"],
+        "NetIncomeLoss": ["NetIncomeLoss", "ProfitLoss"],
+        "OperatingIncomeLoss": ["OperatingIncomeLoss"],
+        "Assets": ["Assets"],
+        "Liabilities": ["Liabilities"],
+        "NetCashProvidedByUsedInOperatingActivities": ["NetCashProvidedByUsedInOperatingActivities"],
+    }
+    result: dict[str, list[dict]] = {}
+    for metric_group, tags in metric_tags.items():
+        for tag in tags:
+            tag_data = us_gaap.get(tag, {})
+            entries = tag_data.get("units", {}).get("USD", [])
+            if not entries:
+                continue
+            result[metric_group] = [
+                {"fiscal_year": e.get("fy"), "value": e.get("val"), "tag": tag, "filed": e.get("filed")}
+                for e in entries if e.get("fp") in ("FY", "Q4")
+            ]
+            break
+    return result
+
+
+def normalize_facts_for_filing(facts: dict[str, list[dict]], fiscal_year: int) -> dict[str, Any]:
+    """Pick the most recently-reported value per metric for a given fiscal year."""
+    result: dict[str, Any] = {}
+    for metric, entries in facts.items():
+        candidates = [e for e in entries if e.get("fiscal_year") == fiscal_year]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda e: e.get("filed", ""), reverse=True)
+        result[metric] = {"value": candidates[0]["value"], "tag": candidates[0]["tag"], "fiscal_year": candidates[0]["fiscal_year"]}
+    return result
+

@@ -12,6 +12,8 @@ from app.db import get_db
 from app.models import (
     CompanyModel,
     DocumentModel,
+    EvalCaseModel,
+    EvalDatasetModel,
     FilingModel,
     FilingSectionModel,
     JobModel,
@@ -24,6 +26,11 @@ from app.routers.auth import get_current_user, get_current_workspace
 from app.schemas import (
     CompanyCreateRequest,
     CompanyResponse,
+    EvalCaseResponse,
+    EvalCaseUpdateRequest,
+    EvalDatasetBuildRequest,
+    EvalDatasetImportRequest,
+    EvalDatasetResponse,
     FilingBindDocumentRequest,
     FilingImportRequest,
     FilingResponse,
@@ -34,6 +41,14 @@ from app.schemas import (
     FinanceEvaluationRunRequest,
 )
 from app.services.finance_agent import run_finance_agent
+from app.services.finance_dataset_builder import (
+    _ensure_dataset,
+    _next_version,
+    freeze_dataset,
+    generate_custom_10k_cases,
+    generate_sec_10k_cases,
+    import_financebench,
+)
 from app.services.finance_evaluation import run_finance_evaluation
 from app.services.finance_sections import parse_10k_sections
 from app.services.sec_connector import download_filing_document, find_10k_filing, load_filing_text, parse_sec_date, resolve_ticker
@@ -282,6 +297,124 @@ def list_eval_results(
         .all()
     )
 
+
+# ── Dataset endpoints ──────────────────────────────────────
+
+@router.get("/datasets", response_model=list[EvalDatasetResponse])
+def list_datasets(
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    return (
+        db.query(EvalDatasetModel)
+        .filter(EvalDatasetModel.workspace_id == workspace.id)
+        .order_by(EvalDatasetModel.created_at.desc())
+        .all()
+    )
+
+
+@router.get("/datasets/{dataset_id}/cases", response_model=list[EvalCaseResponse])
+def list_dataset_cases(
+    dataset_id: int,
+    status: str | None = None,
+    task_type: str | None = None,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    dataset = db.query(EvalDatasetModel).filter(EvalDatasetModel.id == dataset_id, EvalDatasetModel.workspace_id == workspace.id).first()
+    if not dataset:
+        raise HTTPException(404, "数据集不存在")
+    q = db.query(EvalCaseModel).filter(EvalCaseModel.dataset_id == dataset_id)
+    if status:
+        q = q.filter(EvalCaseModel.status == status)
+    if task_type:
+        q = q.filter(EvalCaseModel.task_type == task_type)
+    return q.order_by(EvalCaseModel.created_at.desc()).limit(200).all()
+
+
+@router.post("/datasets/build/sec-10k")
+def build_sec_10k_dataset(
+    req: EvalDatasetBuildRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    ds = _ensure_dataset(db, workspace.id, "sec_10k", "sec_edgar",
+        version=_next_version(db, "sec_10k"),
+        description=f"SEC EDGAR 10-K 基准库，{len(req.tickers)} 家公司各最近 {req.latest_years} 份",
+        source_url="https://www.sec.gov/edgar", license_note="Public domain (SEC EDGAR)")
+    return generate_sec_10k_cases(db, ds, req.tickers, req.latest_years)
+
+
+@router.post("/datasets/import/financebench")
+def import_financebench_dataset(
+    req: EvalDatasetImportRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    ds = _ensure_dataset(db, workspace.id, "financebench_sample_all", "financebench",
+        version=_next_version(db, "financebench_sample_all"),
+        description="FinanceBench (HuggingFace PatronusAI/financebench), 150 rows",
+        source_url="https://huggingface.co/datasets/PatronusAI/financebench", license_note="Apache 2.0")
+    return import_financebench(db, ds)
+
+
+@router.post("/datasets/build/custom-10k")
+def build_custom_10k_dataset(
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    ds = _ensure_dataset(db, workspace.id, "custom_10k", "custom",
+        version=_next_version(db, "custom_10k"),
+        description="自建 10-K 评估用例，基于已导入 filing 的 sections + facts 模板生成")
+    return generate_custom_10k_cases(db, ds)
+
+
+@router.post("/datasets/{dataset_id}/freeze")
+def freeze_dataset_endpoint(
+    dataset_id: int,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    dataset = db.query(EvalDatasetModel).filter(EvalDatasetModel.id == dataset_id, EvalDatasetModel.workspace_id == workspace.id).first()
+    if not dataset:
+        raise HTTPException(404, "数据集不存在")
+    return EvalDatasetResponse.model_validate(freeze_dataset(db, dataset_id))
+
+
+@router.patch("/eval-cases/{case_id}", response_model=EvalCaseResponse)
+def update_eval_case(
+    case_id: int,
+    req: EvalCaseUpdateRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    case = db.query(EvalCaseModel).filter(EvalCaseModel.id == case_id).first()
+    if not case:
+        raise HTTPException(404, "评估用例不存在")
+    if req.status is not None:
+        case.status = req.status
+    if req.expected_answer is not None:
+        case.expected_answer = req.expected_answer
+    if req.expected_numeric is not None:
+        case.expected_numeric = req.expected_numeric
+    if req.tolerance is not None:
+        case.tolerance = req.tolerance
+    if req.difficulty is not None:
+        case.difficulty = req.difficulty
+    if req.rubric_json is not None:
+        case.rubric_json = req.rubric_json
+    db.commit()
+    db.refresh(case)
+    return case
+
+
+# ── Helpers ────────────────────────────────────────────────
 
 def _verify_workspace_access(db: Session, user_id: int, workspace_id: int) -> None:
     membership = (

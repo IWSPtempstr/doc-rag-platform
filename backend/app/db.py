@@ -325,6 +325,38 @@ def _ensure_v3_tables(conn):
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_eval_cases_id ON eval_cases (id)"))
 
+    # v3.1 — new columns on eval_datasets and eval_cases
+    ds_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(eval_datasets)")).fetchall()} if "eval_datasets" in existing else set()
+    if "manifest_json" not in ds_cols:
+        conn.execute(text("ALTER TABLE eval_datasets ADD COLUMN manifest_json JSON"))
+    if "case_count" not in ds_cols:
+        conn.execute(text("ALTER TABLE eval_datasets ADD COLUMN case_count INTEGER DEFAULT 0"))
+    if "frozen_at" not in ds_cols:
+        conn.execute(text("ALTER TABLE eval_datasets ADD COLUMN frozen_at DATETIME"))
+    if "source_url" not in ds_cols:
+        conn.execute(text("ALTER TABLE eval_datasets ADD COLUMN source_url VARCHAR(1000)"))
+    if "license_note" not in ds_cols:
+        conn.execute(text("ALTER TABLE eval_datasets ADD COLUMN license_note VARCHAR(500)"))
+
+    case_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(eval_cases)")).fetchall()} if "eval_cases" in existing else set()
+    if "case_uid" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN case_uid VARCHAR(200)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_eval_cases_case_uid ON eval_cases (case_uid)"))
+    if "task_type" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN task_type VARCHAR(40)"))
+    if "difficulty" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN difficulty VARCHAR(20) DEFAULT 'medium'"))
+    if "status" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN status VARCHAR(20) DEFAULT 'draft'"))
+    if "gold_filing_id" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN gold_filing_id INTEGER REFERENCES filings (id) ON DELETE SET NULL"))
+    if "gold_document_id" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN gold_document_id INTEGER REFERENCES documents (id) ON DELETE SET NULL"))
+    if "expected_calculation" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN expected_calculation JSON"))
+    if "rubric_json" not in case_cols:
+        conn.execute(text("ALTER TABLE eval_cases ADD COLUMN rubric_json JSON"))
+
     if "eval_results" not in existing:
         conn.execute(text("""
             CREATE TABLE eval_results (

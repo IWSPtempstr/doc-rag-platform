@@ -346,6 +346,65 @@ class FinanceAgentQueryResponse(BaseModel):
     verification: dict = {}
 
 
+class EvalDatasetBuildRequest(BaseModel):
+    tickers: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "AMZN", "GOOGL", "NVDA", "META", "JPM", "XOM", "JNJ", "WMT"])
+    latest_years: int = 3
+
+
+class EvalDatasetImportRequest(BaseModel):
+    source: str = "huggingface"
+    dataset_path: str = "PatronusAI/financebench"
+    subset: str = "financebench_v1"
+
+
+class EvalDatasetResponse(BaseModel):
+    id: int
+    workspace_id: int
+    name: str
+    source: str
+    version: str
+    description: Optional[str] = None
+    manifest_json: Optional[dict] = None
+    case_count: int = 0
+    frozen_at: Optional[datetime] = None
+    source_url: Optional[str] = None
+    license_note: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EvalCaseResponse(BaseModel):
+    id: int
+    dataset_id: int
+    case_uid: Optional[str] = None
+    question: str
+    expected_answer: Optional[str] = None
+    expected_evidence: Optional[Any] = None
+    expected_numeric: Optional[float] = None
+    expected_calculation: Optional[Any] = None
+    tolerance: float = 0.01
+    task_type: Optional[str] = None
+    difficulty: str = "medium"
+    status: str = "draft"
+    gold_filing_id: Optional[int] = None
+    gold_document_id: Optional[int] = None
+    rubric_json: Optional[Any] = None
+    metadata_json: Optional[Any] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EvalCaseUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    expected_answer: Optional[str] = None
+    expected_numeric: Optional[float] = None
+    tolerance: Optional[float] = None
+    difficulty: Optional[str] = None
+    rubric_json: Optional[dict] = None
+
+
 class FinanceEvaluationRunRequest(BaseModel):
     workspace_id: int = 1
     dataset_source: str = "custom_10k"
