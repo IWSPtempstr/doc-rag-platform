@@ -234,3 +234,34 @@ export interface FinanceSummary {
     public_data_only: boolean;
   }>;
 }
+
+export interface FinancialFact {
+  id: number;
+  filing_id: number;
+  metric: string;
+  label: string;
+  value: number | null;
+  unit: string | null;
+  period: string | null;
+  source: string;
+  evidence: string | null;
+  confidence: number | null;
+  created_at: string;
+}
+
+export interface MarketFact {
+  id: number;
+  workspace_id: number;
+  company_id: number;
+  ticker: string;
+  trade_date: string;
+  metric: string;
+  label: string;
+  value: number | null;
+  unit: string | null;
+  source: string;
+  source_url: string | null;
+  confidence: number | null;
+  metadata_json: Record<string, any> | null;
+  created_at: string | null;
+}

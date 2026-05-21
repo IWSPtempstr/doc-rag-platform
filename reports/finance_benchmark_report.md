@@ -1,0 +1,41 @@
+# Finance Benchmark Report
+
+Workspace: `1`
+
+## Public Datasets
+- `tatqa_sample` (tatqa v1): cases=150, frozen=True
+  source: https://huggingface.co/datasets/next-tat/TAT-QA
+  license: Public academic benchmark source
+- `finqa_sample` (finqa v1): cases=25, frozen=True
+  source: https://huggingface.co/datasets/ibm-research/finqa
+  license: Public academic benchmark source
+- `custom_10k` (custom v1): cases=13, frozen=True
+  failures: {"gold_not_retrievable": 1, "document_not_indexed": 12, "index_incomplete": 12}
+- `sec_10k` (sec_edgar v1): cases=12, frozen=True
+  source: https://www.sec.gov/edgar
+  license: Public domain (SEC EDGAR)
+- `financebench_sample_all` (financebench v1): cases=0, frozen=True
+  source: https://huggingface.co/datasets/PatronusAI/financebench
+  license: Apache 2.0
+
+## Latest Results
+- result #14 dataset=5 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 1.0, "fact_grounding_rate": null, "numeric_accuracy": 0.0388, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": null, "total_cases": 150, "skipped_cases": 0, "numeric_cases": 129, "fact_grounding_cases": 0, "abstain_cases": 0, "abstain_correct": 0, "by_task_type": {"calculation": {"total": 129, "retrieval_hit_rate": 1.0, "numeric_accuracy": 0.0388, "evidence_recall": 1.0, "fact_grounding_rate": null, "abstain_accuracy": 1.0}, "evidence_retrieval": {"total": 21, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 1.0, "fact_grounding_rate": null, "abstain_accuracy": null}}}
+- result #13 dataset=4 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 1.92, "fact_grounding_rate": null, "numeric_accuracy": 0.0, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": null, "total_cases": 25, "skipped_cases": 0, "numeric_cases": 24, "fact_grounding_cases": 0, "abstain_cases": 0, "abstain_correct": 0, "by_task_type": {"calculation": {"total": 24, "retrieval_hit_rate": 1.0, "numeric_accuracy": 0.0, "evidence_recall": 1.9167, "fact_grounding_rate": null, "abstain_accuracy": null}, "evidence_retrieval": {"total": 1, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 2.0, "fact_grounding_rate": null, "abstain_accuracy": null}}}
+- result #12 dataset=3 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 0.5385, "fact_grounding_rate": 1.0, "numeric_accuracy": 1.0, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": 1.0, "total_cases": 13, "skipped_cases": 0, "numeric_cases": 2, "fact_grounding_cases": 2, "abstain_cases": 4, "abstain_correct": 4, "by_task_type": {"evidence_retrieval": {"total": 5, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 1.0, "fact_grounding_rate": null, "abstain_accuracy": null}, "calculation": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 1.0, "abstain_accuracy": null}, "risk_trend": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 1.0, "fact_grounding_rate": null, "abstain_accuracy": null}, "insufficient_evidence": {"total": 4, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 0.0, "fact_grounding_rate": null, "abstain_accuracy": 1.0}}}
+- result #11 dataset=3 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 0.5385, "fact_grounding_rate": 0.0, "numeric_accuracy": 1.0, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": 1.0, "total_cases": 13, "skipped_cases": 0, "numeric_cases": 2, "abstain_cases": 4, "abstain_correct": 4, "by_task_type": {"evidence_retrieval": {"total": 5, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 1.0, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "calculation": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "risk_trend": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 1.0, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "insufficient_evidence": {"total": 4, "retrieval_hit_rate": 1.0, "numeric_accuracy": null, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": 1.0}}}
+- result #10 dataset=2 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 1.0, "numeric_accuracy": 1.0, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": null, "total_cases": 12, "numeric_cases": 12, "abstain_cases": 0, "abstain_correct": 0, "by_task_type": {"numeric": {"total": 12, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 1.0, "abstain_accuracy": null}}}
+- result #9 dataset=3 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 0.3684, "evidence_recall": 0.1842, "fact_grounding_rate": 0.0, "numeric_accuracy": 1.0, "citation_coverage": 0.3684, "verifier_pass_rate": 0.3684, "abstain_accuracy": 1.0, "total_cases": 38, "numeric_cases": 2, "abstain_cases": 12, "abstain_correct": 12, "by_task_type": {"evidence_retrieval": {"total": 18, "retrieval_hit_rate": 0.3333, "numeric_accuracy": null, "evidence_recall": 0.2778, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "calculation": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "risk_trend": {"total": 6, "retrieval_hit_rate": 0.3333, "numeric_accuracy": null, "evidence_recall": 0.3333, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "insufficient_evidence": {"total": 12, "retrieval_hit_rate": 0.3333, "numeric_accuracy": null, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": 1.0}}}
+- result #8 dataset=3 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 0.3684, "evidence_recall": 0.1842, "fact_grounding_rate": 0.0, "numeric_accuracy": 1.1429, "citation_coverage": 0.3684, "verifier_pass_rate": 0.3684, "abstain_accuracy": 0.5, "total_cases": 38, "numeric_cases": 2, "abstain_cases": 12, "abstain_correct": 6, "by_task_type": {"evidence_retrieval": {"total": 18, "retrieval_hit_rate": 0.3333, "numeric_accuracy": 0.3333, "evidence_recall": 0.2778, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "calculation": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "risk_trend": {"total": 6, "retrieval_hit_rate": 0.3333, "numeric_accuracy": 0.3333, "evidence_recall": 0.3333, "fact_grounding_rate": 0.0, "abstain_accuracy": null}, "insufficient_evidence": {"total": 12, "retrieval_hit_rate": 0.3333, "numeric_accuracy": 0.5, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "abstain_accuracy": 0.5}}}
+- result #7 dataset=2 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 1.0, "numeric_accuracy": 1.0, "citation_coverage": 1.0, "verifier_pass_rate": 1.0, "abstain_accuracy": null, "total_cases": 12, "numeric_cases": 12, "abstain_cases": 0, "abstain_correct": 0, "by_task_type": {"numeric": {"total": 12, "retrieval_hit_rate": 1.0, "numeric_accuracy": 1.0, "evidence_recall": 0.0, "fact_grounding_rate": 1.0, "abstain_accuracy": null}}}
+- result #6 dataset=2 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 0.0, "evidence_recall": 0.0, "fact_grounding_rate": 0.0, "numeric_accuracy": 0.0, "citation_coverage": 0.0, "verifier_pass_rate": 0.0, "abstain_accuracy": null, "total_cases": 12, "numeric_cases": 0, "abstain_cases": 0, "abstain_correct": 0, "by_task_type": {}}
+- result #5 dataset=3 strategy=finance_agent
+  metrics: {"retrieval_hit_rate": 1.0, "evidence_recall": 0.6, "numeric_accuracy": 0.2, "citation_coverage": 1.0, "verifier_pass_rate": 0.6, "total_cases": 10, "by_task_type": {"evidence_retrieval": {"total": 4, "retrieval_hit_rate": 1.0, "numeric_accuracy": 0.0, "evidence_recall": 1.0}, "risk_trend": {"total": 2, "retrieval_hit_rate": 1.0, "numeric_accuracy": 0.0, "evidence_recall": 1.0}, "insufficient_evidence": {"total": 4, "retrieval_hit_rate": 1.0, "numeric_accuracy": 0.5, "evidence_recall": 0.0}}}

@@ -118,6 +118,7 @@ class CompanyModel(Base):
 
     workspace = relationship("WorkspaceModel", back_populates="companies")
     filings = relationship("FilingModel", back_populates="company", cascade="all, delete-orphan")
+    market_facts = relationship("MarketFactModel", back_populates="company", cascade="all, delete-orphan")
 
 
 class FilingModel(Base):
@@ -174,6 +175,27 @@ class FinancialFactModel(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     filing = relationship("FilingModel", back_populates="facts")
+
+
+class MarketFactModel(Base):
+    __tablename__ = "market_facts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
+    ticker = Column(String(20), nullable=False, index=True)
+    trade_date = Column(String(20), nullable=False, index=True)
+    metric = Column(String(120), nullable=False)
+    label = Column(String(300), nullable=False)
+    value = Column(Float, nullable=True)
+    unit = Column(String(50), nullable=True)
+    source = Column(String(120), default="akshare")
+    source_url = Column(String(1000), nullable=True)
+    confidence = Column(Float, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+    company = relationship("CompanyModel", back_populates="market_facts")
 
 
 class AgentRunModel(Base):

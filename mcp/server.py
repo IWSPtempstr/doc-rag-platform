@@ -3,6 +3,7 @@
 import json
 import sys
 import os
+from datetime import date, datetime
 
 # 添加 backend 到 path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
@@ -11,8 +12,9 @@ from app.services.rag_service import rag_query
 from app.services.vector_store import query as dense_query, collection_count
 from app.services.embedding_provider import embed_single
 from app.db import SessionLocal, ensure_sqlite_schema
-from app.models import DocumentModel, CollectionModel, SettingsModel
+from app.models import CompanyModel, DocumentModel, CollectionModel, FilingModel, MarketFactModel, SettingsModel
 from app.config import config
+from app.services.ashare_connector import download_announcement, get_annual_report, search_announcements
 
 
 # --- MCP 协议实现 ---
@@ -21,7 +23,17 @@ from app.config import config
 
 
 def make_response(ok: bool, data=None, error: str | None = None, trace_id: str | None = None) -> str:
-    return json.dumps({"ok": ok, "data": data, "error": error, "trace_id": trace_id}, ensure_ascii=False)
+    return json.dumps(
+        {"ok": ok, "data": data, "error": error, "trace_id": trace_id},
+        ensure_ascii=False,
+        default=_json_default,
+    )
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
 def get_runtime_settings(db):
@@ -109,6 +121,80 @@ def handle_tool_call(tool_name: str, arguments: dict) -> str:
                 return make_response(True, data)
             return make_response(False, error="文档不存在")
 
+        elif tool_name == "search_ashare_announcements":
+            data = search_announcements(
+                ticker=arguments.get("ticker", ""),
+                start_date=arguments.get("start_date"),
+                end_date=arguments.get("end_date"),
+                category=arguments.get("category"),
+                keyword=arguments.get("keyword"),
+                page_size=arguments.get("page_size", 30),
+            )
+            return make_response(True, data)
+
+        elif tool_name == "get_ashare_annual_report":
+            report = get_annual_report(
+                arguments.get("ticker", ""),
+                int(arguments.get("fiscal_year")),
+            )
+            return make_response(True, report)
+
+        elif tool_name == "download_ashare_announcement":
+            announcement = arguments.get("announcement") or {}
+            downloaded = download_announcement(announcement)
+            return make_response(True, downloaded)
+
+        elif tool_name == "get_ashare_filings_by_company":
+            ticker = str(arguments.get("ticker", "")).upper()
+            filing_type = arguments.get("filing_type")
+            fiscal_year = arguments.get("fiscal_year")
+            company = db.query(CompanyModel).filter(CompanyModel.ticker == ticker).first()
+            if not company:
+                return make_response(True, [])
+            q = db.query(FilingModel).filter(FilingModel.company_id == company.id)
+            if filing_type:
+                q = q.filter(FilingModel.filing_type == filing_type)
+            if fiscal_year:
+                q = q.filter(FilingModel.fiscal_year == int(fiscal_year))
+            filings = q.order_by(FilingModel.fiscal_year.desc(), FilingModel.created_at.desc()).limit(50).all()
+            data = [
+                {
+                    "id": filing.id,
+                    "ticker": ticker,
+                    "filing_type": filing.filing_type,
+                    "fiscal_year": filing.fiscal_year,
+                    "document_id": filing.document_id,
+                    "source_url": filing.source_url,
+                    "status": filing.status,
+                    "metadata_json": filing.metadata_json,
+                }
+                for filing in filings
+            ]
+            return make_response(True, data)
+
+        elif tool_name == "list_ashare_market_facts":
+            ticker = str(arguments.get("ticker", "")).upper()
+            metric = arguments.get("metric")
+            q = db.query(MarketFactModel).filter(MarketFactModel.ticker == ticker)
+            if metric:
+                q = q.filter(MarketFactModel.metric == metric)
+            facts = q.order_by(MarketFactModel.trade_date.desc()).limit(arguments.get("limit", 50)).all()
+            data = [
+                {
+                    "id": fact.id,
+                    "ticker": fact.ticker,
+                    "trade_date": fact.trade_date,
+                    "metric": fact.metric,
+                    "label": fact.label,
+                    "value": fact.value,
+                    "unit": fact.unit,
+                    "source": fact.source,
+                    "metadata_json": fact.metadata_json,
+                }
+                for fact in facts
+            ]
+            return make_response(True, data)
+
         else:
             return make_response(False, error=f"未知工具: {tool_name}")
 
@@ -170,6 +256,71 @@ TOOLS = [
                 "document_id": {"type": "integer", "description": "文档 ID"},
             },
             "required": ["document_id"],
+        },
+    },
+    {
+        "name": "search_ashare_announcements",
+        "description": "搜索 A 股巨潮资讯公告，返回标准化公告元数据",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "6 位 A 股代码，如 600519"},
+                "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
+                "category": {"type": "string", "description": "CNINFO 分类代码"},
+                "keyword": {"type": "string", "description": "公告标题关键词"},
+                "page_size": {"type": "integer", "description": "返回数量", "default": 30},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_ashare_annual_report",
+        "description": "获取指定 A 股公司指定年份的完整年度报告公告元数据",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "6 位 A 股代码，如 600519"},
+                "fiscal_year": {"type": "integer", "description": "财年，如 2023"},
+            },
+            "required": ["ticker", "fiscal_year"],
+        },
+    },
+    {
+        "name": "download_ashare_announcement",
+        "description": "下载已标准化的 A 股公告 PDF 到公开数据目录",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "announcement": {"type": "object", "description": "search_ashare_announcements 返回的公告对象"},
+            },
+            "required": ["announcement"],
+        },
+    },
+    {
+        "name": "get_ashare_filings_by_company",
+        "description": "查询已入库 A 股公司的 filings",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "6 位 A 股代码"},
+                "filing_type": {"type": "string", "description": "filing 类型，如 annual_report"},
+                "fiscal_year": {"type": "integer", "description": "财年"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "list_ashare_market_facts",
+        "description": "查询已入库 A 股行情事实",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "6 位 A 股代码"},
+                "metric": {"type": "string", "description": "指标，如 close/open/volume"},
+                "limit": {"type": "integer", "description": "返回数量", "default": 50},
+            },
+            "required": ["ticker"],
         },
     },
 ]

@@ -11,6 +11,7 @@ from app.models import (
     # v3 finance models
     UserModel, WorkspaceModel, MembershipModel,
     CompanyModel, FilingModel, FilingSectionModel, FinancialFactModel,
+    MarketFactModel,
     AgentRunModel, AgentStepModel, AgentArtifactModel,
     EvalDatasetModel, EvalCaseModel, EvalResultModel,
     ImageAssetModel,

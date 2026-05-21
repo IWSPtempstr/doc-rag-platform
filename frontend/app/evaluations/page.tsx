@@ -51,9 +51,9 @@ export default function EvaluationsPage() {
               <div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
                 <Metric label="策略" value={result.strategy} />
                 <Metric label="Hit Rate" value={`${((result.hit_rate || 0) * 100).toFixed(1)}%`} />
-                <Metric label="问题数" value={String(result.total || 0)} />
+                <Metric label="问题数" value={String(getEvaluationSummary(result).total || 0)} />
               </div>
-              {(result.results || []).map((r: any, i: number) => (
+              {getEvaluationRows(result).map((r: any, i: number) => (
                 <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #eee", fontSize: 13 }}>
                   <span style={{ color: r.hit ? "#4caf50" : "#f44336", fontWeight: 700, marginRight: 8 }}>
                     {r.hit ? "HIT" : "MISS"}
@@ -87,3 +87,12 @@ const Metric = ({ label, value }: { label: string; value: string }) => (
     <div style={{ fontSize: 18, fontWeight: 700 }}>{value}</div>
   </div>
 );
+
+function getEvaluationSummary(result: any) {
+  return result?.results && !Array.isArray(result.results) ? result.results : result;
+}
+
+function getEvaluationRows(result: any) {
+  const summary = getEvaluationSummary(result);
+  return Array.isArray(summary?.results) ? summary.results : [];
+}

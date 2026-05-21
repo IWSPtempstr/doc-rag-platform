@@ -296,6 +296,7 @@ def _persist_image_chunk_bindings(db, image_asset_map: dict[int, list[dict]]) ->
 
 
 def _filing_vector_metadata(filing: FilingModel) -> dict:
+    metadata = filing.metadata_json or {}
     return {
         "filing_id": filing.id,
         "company_id": filing.company_id,
@@ -303,6 +304,10 @@ def _filing_vector_metadata(filing: FilingModel) -> dict:
         "company_ticker": filing.company.ticker if filing.company else None,
         "fiscal_year": filing.fiscal_year,
         "filing_type": filing.filing_type,
+        "market": metadata.get("market"),
+        "source": metadata.get("source"),
+        "exchange": metadata.get("exchange") or (filing.company.exchange if filing.company else None),
+        "disclosure_category": metadata.get("disclosure_category"),
     }
 
 

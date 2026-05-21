@@ -261,7 +261,7 @@ class FilingImportRequest(BaseModel):
 class FilingBindDocumentRequest(BaseModel):
     document_id: int
     fiscal_year: int
-    filing_type: Literal["10-K"] = "10-K"
+    filing_type: str = "10-K"
 
 
 class FilingResponse(BaseModel):
@@ -309,6 +309,57 @@ class FinancialFactResponse(BaseModel):
     evidence: Optional[str] = None
     confidence: Optional[float] = None
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AshareAnnouncementResponse(BaseModel):
+    market: str = "CN"
+    source: str = "cninfo"
+    ticker: str
+    stock_code: str
+    company_name: str
+    exchange: str
+    announcement_id: str
+    announcement_title: str
+    published_at: Optional[datetime] = None
+    download_url: Optional[str] = None
+    disclosure_category: Optional[str] = None
+    filing_type: str
+    fiscal_year: int
+
+
+class AshareFilingImportRequest(BaseModel):
+    fiscal_year: int
+    announcement_id: Optional[str] = None
+    keyword: Optional[str] = None
+
+
+class AshareFactsSyncRequest(BaseModel):
+    fiscal_year: Optional[int] = None
+    provider: str = "akshare"
+
+
+class AshareMarketSyncRequest(BaseModel):
+    trade_date: Optional[str] = None
+    provider: str = "akshare"
+
+
+class MarketFactResponse(BaseModel):
+    id: int
+    workspace_id: int
+    company_id: int
+    ticker: str
+    trade_date: str
+    metric: str
+    label: str
+    value: Optional[float] = None
+    unit: Optional[str] = None
+    source: str
+    source_url: Optional[str] = None
+    confidence: Optional[float] = None
+    metadata_json: Optional[dict] = None
+    created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

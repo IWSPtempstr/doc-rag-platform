@@ -106,6 +106,7 @@ def retrieve(
     bm25_index: BM25Sparse | None = None,
     provider: str | None = None,
     embedding_model: str | None = None,
+    where: dict | None = None,
 ) -> list[dict]:
     """
     统一检索入口。
@@ -119,6 +120,7 @@ def retrieve(
             top_k=max(top_k, 10),
             embedding_provider=provider,
             embedding_model=embedding_model,
+            where=where,
         )
     except Exception as e:
         raise RuntimeError(

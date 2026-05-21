@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.config import config
@@ -17,7 +17,9 @@ from app.models import (
     EvalResultModel,
     FilingModel,
     FilingSectionModel,
+    FinancialFactModel,
     JobModel,
+    MarketFactModel,
     MembershipModel,
     UserModel,
     WorkspaceModel,
@@ -25,6 +27,10 @@ from app.models import (
 from app.redis_client import enqueue_job
 from app.routers.auth import get_current_user, get_current_workspace
 from app.schemas import (
+    AshareAnnouncementResponse,
+    AshareFactsSyncRequest,
+    AshareFilingImportRequest,
+    AshareMarketSyncRequest,
     CompanyCreateRequest,
     CompanyResponse,
     EvalCaseResponse,
@@ -36,10 +42,12 @@ from app.schemas import (
     FilingImportRequest,
     FilingResponse,
     FilingSectionResponse,
+    FinancialFactResponse,
     FinanceAgentQueryRequest,
     FinanceAgentQueryResponse,
     FinanceEvaluationResultResponse,
     FinanceEvaluationRunRequest,
+    MarketFactResponse,
 )
 from app.services.finance_agent import run_finance_agent
 from app.services.finance_dataset_builder import (
@@ -55,6 +63,8 @@ from app.services.finance_dataset_builder import (
 from app.services.finance_evaluation import run_finance_evaluation
 from app.services.finance_sections import parse_10k_sections
 from app.services.sec_connector import download_filing_document, find_10k_filing, load_filing_text, parse_sec_date, resolve_ticker
+from app.services.ashare_connector import download_announcement, get_annual_report, search_announcements
+from app.services.ashare_structured_provider import load_akshare_provider, normalize_financial_value
 
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
 
@@ -188,6 +198,81 @@ def import_company_filing(
     return _filing_response(filing)
 
 
+@router.get("/ashare/companies/{ticker}/announcements", response_model=list[AshareAnnouncementResponse])
+def list_ashare_announcements(
+    ticker: str,
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+):
+    try:
+        return search_announcements(
+            ticker,
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            keyword=keyword,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"CNINFO 公告检索失败: {exc}") from exc
+
+
+@router.post("/ashare/companies/{ticker}/filings/import", response_model=FilingResponse)
+def import_ashare_filing(
+    ticker: str,
+    req: AshareFilingImportRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    company = _ensure_ashare_company(db, workspace.id, ticker)
+    try:
+        announcement = get_annual_report(company.ticker, req.fiscal_year)
+        if req.announcement_id:
+            rows = search_announcements(company.ticker, keyword=req.keyword or str(req.fiscal_year), page_size=50)
+            announcement = next((row for row in rows if row.get("announcement_id") == req.announcement_id), announcement)
+        if not announcement:
+            raise ValueError(f"未找到 {company.ticker} {req.fiscal_year} 年报公告")
+        downloaded = download_announcement(announcement)
+    except Exception as exc:
+        raise HTTPException(502, f"A 股公告导入失败: {exc}") from exc
+
+    doc = DocumentModel(
+        filename=downloaded["filename"],
+        stored_path=downloaded["stored_path"],
+        content_type=downloaded["content_type"],
+        size_bytes=downloaded["size_bytes"],
+        status="pending",
+        tags=f"finance,ashare,{company.ticker},{announcement['filing_type']},{announcement['fiscal_year']}",
+    )
+    db.add(doc)
+    db.flush()
+
+    metadata = {k: v for k, v in announcement.items() if k != "raw"}
+    filing = FilingModel(
+        workspace_id=workspace.id,
+        company_id=company.id,
+        document_id=doc.id,
+        accession_number=announcement.get("announcement_id"),
+        filing_type=announcement.get("filing_type") or "annual_report",
+        fiscal_year=announcement.get("fiscal_year") or req.fiscal_year,
+        filed_at=announcement.get("published_at"),
+        source_url=downloaded["source_url"],
+        status="queued",
+        metadata_json=metadata,
+    )
+    db.add(filing)
+    job = JobModel(document_id=doc.id, type="ingestion", status="pending")
+    db.add(job)
+    db.commit()
+    db.refresh(filing)
+    db.refresh(job)
+    enqueue_job(job.id, doc.id, doc.stored_path, doc.content_type)
+    return _filing_response(filing)
+
+
 @router.get("/filings/{filing_id}", response_model=FilingResponse)
 def get_filing(
     filing_id: int,
@@ -215,6 +300,139 @@ def get_filing_sections(
         db.query(FilingSectionModel)
         .filter(FilingSectionModel.filing_id == filing_id)
         .order_by(FilingSectionModel.char_start.asc())
+        .all()
+    )
+
+
+@router.get("/filings/{filing_id}/facts", response_model=list[FinancialFactResponse])
+def get_filing_facts(
+    filing_id: int,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    filing = db.query(FilingModel).filter(FilingModel.id == filing_id).first()
+    if not filing:
+        raise HTTPException(404, "财报不存在")
+    _verify_workspace_access(db, current_user.id, filing.workspace_id)
+    return (
+        db.query(FinancialFactModel)
+        .filter(FinancialFactModel.filing_id == filing.id)
+        .order_by(FinancialFactModel.metric.asc())
+        .all()
+    )
+
+
+@router.post("/ashare/companies/{ticker}/facts/sync")
+def sync_ashare_financial_facts(
+    ticker: str,
+    req: AshareFactsSyncRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    if req.provider != "akshare":
+        raise HTTPException(400, "第一版仅支持 akshare provider")
+    company = _ensure_ashare_company(db, workspace.id, ticker)
+    filing = _latest_company_filing(db, workspace.id, company.id, req.fiscal_year)
+    if not filing:
+        raise HTTPException(400, "请先导入该公司的 A 股年报 filing，再同步结构化财务事实")
+    try:
+        ak = load_akshare_provider()
+        rows = _load_akshare_financial_rows(ak, company.ticker)
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    upserted = 0
+    metric_labels = {
+        "Revenues": "营业总收入",
+        "NetIncomeLoss": "净利润",
+        "OperatingIncomeLoss": "营业利润",
+        "Assets": "资产总计",
+        "Liabilities": "负债合计",
+        "OperatingCashFlow": "经营活动产生的现金流量净额",
+    }
+    for row in rows:
+        period = _report_period_from_row(row, filing.fiscal_year)
+        if req.fiscal_year and str(req.fiscal_year) not in period:
+            continue
+        for metric, label in metric_labels.items():
+            value = normalize_financial_value(row.get(label))
+            if value is None:
+                continue
+            _upsert_financial_fact(
+                db,
+                filing.id,
+                metric=metric,
+                label=label,
+                value=value,
+                period=period,
+                source="akshare",
+                evidence=f"{company.ticker} {period} {label}",
+            )
+            upserted += 1
+    db.commit()
+    return {"company_id": company.id, "filing_id": filing.id, "upserted": upserted, "provider": req.provider}
+
+
+@router.post("/ashare/companies/{ticker}/market/sync")
+def sync_ashare_market_facts(
+    ticker: str,
+    req: AshareMarketSyncRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    if req.provider != "akshare":
+        raise HTTPException(400, "第一版仅支持 akshare provider")
+    company = _ensure_ashare_company(db, workspace.id, ticker)
+    try:
+        ak = load_akshare_provider()
+        rows = _load_akshare_market_rows(ak, company.ticker)
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    row = None
+    for candidate in reversed(rows):
+        date_text = str(candidate.get("日期") or candidate.get("trade_date") or candidate.get("date") or "")
+        if not req.trade_date or date_text == req.trade_date:
+            row = candidate
+            break
+    if not row:
+        raise HTTPException(404, "未找到指定交易日行情")
+
+    date_text = str(row.get("日期") or row.get("trade_date") or req.trade_date)
+    metric_labels = {
+        "close": ("收盘", "CNY"),
+        "open": ("开盘", "CNY"),
+        "high": ("最高", "CNY"),
+        "low": ("最低", "CNY"),
+        "volume": ("成交量", "shares"),
+        "amount": ("成交额", "CNY"),
+    }
+    upserted = 0
+    for metric, (label, unit) in metric_labels.items():
+        value = normalize_financial_value(row.get(label))
+        if value is None:
+            continue
+        _upsert_market_fact(db, workspace.id, company.id, company.ticker, date_text, metric, label, value, unit, req.provider)
+        upserted += 1
+    db.commit()
+    return {"company_id": company.id, "trade_date": date_text, "upserted": upserted, "provider": req.provider}
+
+
+@router.get("/companies/{ticker}/market-facts", response_model=list[MarketFactResponse])
+def list_company_market_facts(
+    ticker: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    company = _get_company_or_404(db, workspace.id, ticker)
+    return (
+        db.query(MarketFactModel)
+        .filter(MarketFactModel.workspace_id == workspace.id, MarketFactModel.company_id == company.id)
+        .order_by(MarketFactModel.trade_date.desc(), MarketFactModel.metric.asc())
+        .limit(200)
         .all()
     )
 
@@ -534,6 +752,44 @@ def _ensure_company(db: Session, workspace_id: int, ticker: str) -> CompanyModel
     return company
 
 
+def _ensure_ashare_company(db: Session, workspace_id: int, ticker: str) -> CompanyModel:
+    code = ticker.upper().strip()
+    existing = (
+        db.query(CompanyModel)
+        .filter(CompanyModel.workspace_id == workspace_id, CompanyModel.ticker == code)
+        .first()
+    )
+    if existing:
+        return existing
+    company = CompanyModel(
+        workspace_id=workspace_id,
+        ticker=code,
+        name=code,
+        cik=None,
+        exchange="SSE" if code.startswith(("5", "6", "9")) or code.startswith("688") else "SZSE",
+        industry="A-share",
+    )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return company
+
+
+def _latest_company_filing(db: Session, workspace_id: int, company_id: int, fiscal_year: int | None) -> FilingModel | None:
+    q = db.query(FilingModel).filter(FilingModel.workspace_id == workspace_id, FilingModel.company_id == company_id)
+    if fiscal_year:
+        q = q.filter(FilingModel.fiscal_year == fiscal_year)
+    return q.order_by(FilingModel.fiscal_year.desc(), FilingModel.created_at.desc()).first()
+
+
+def _report_period_from_row(row: dict, fallback_year: int | None) -> str:
+    for key in ("period", "报告期", "报告日", "报表日期", "日期"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return str(fallback_year or "")
+
+
 def _get_company_or_404(db: Session, workspace_id: int, ticker: str) -> CompanyModel:
     company = (
         db.query(CompanyModel)
@@ -543,6 +799,122 @@ def _get_company_or_404(db: Session, workspace_id: int, ticker: str) -> CompanyM
     if not company:
         raise HTTPException(404, "公司不存在")
     return company
+
+
+def _upsert_financial_fact(
+    db: Session,
+    filing_id: int,
+    metric: str,
+    label: str,
+    value: float | None,
+    period: str | None,
+    source: str,
+    evidence: str | None = None,
+):
+    existing = (
+        db.query(FinancialFactModel)
+        .filter(
+            FinancialFactModel.filing_id == filing_id,
+            FinancialFactModel.metric == metric,
+            FinancialFactModel.period == period,
+        )
+        .first()
+    )
+    if existing:
+        existing.label = label
+        existing.value = value
+        existing.source = source
+        existing.evidence = evidence
+        existing.confidence = 1.0
+        return existing
+    fact = FinancialFactModel(
+        filing_id=filing_id,
+        metric=metric,
+        label=label,
+        value=value,
+        period=period,
+        source=source,
+        evidence=evidence,
+        confidence=1.0,
+    )
+    db.add(fact)
+    return fact
+
+
+def _upsert_market_fact(
+    db: Session,
+    workspace_id: int,
+    company_id: int,
+    ticker: str,
+    trade_date: str,
+    metric: str,
+    label: str,
+    value: float | None,
+    unit: str,
+    source: str,
+):
+    existing = (
+        db.query(MarketFactModel)
+        .filter(
+            MarketFactModel.workspace_id == workspace_id,
+            MarketFactModel.company_id == company_id,
+            MarketFactModel.trade_date == trade_date,
+            MarketFactModel.metric == metric,
+        )
+        .first()
+    )
+    if existing:
+        existing.label = label
+        existing.value = value
+        existing.unit = unit
+        existing.source = source
+        existing.ticker = ticker
+        existing.confidence = 1.0
+        return existing
+    fact = MarketFactModel(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        ticker=ticker,
+        trade_date=trade_date,
+        metric=metric,
+        label=label,
+        value=value,
+        unit=unit,
+        source=source,
+        confidence=1.0,
+    )
+    db.add(fact)
+    return fact
+
+
+def _load_akshare_financial_rows(ak, ticker: str) -> list[dict]:
+    candidates = [
+        ("stock_financial_report_sina", {"stock": ticker, "symbol": "利润表"}),
+        ("stock_financial_report_sina", {"stock": ticker, "symbol": "资产负债表"}),
+        ("stock_financial_report_sina", {"stock": ticker, "symbol": "现金流量表"}),
+    ]
+    rows = []
+    for fn_name, kwargs in candidates:
+        fn = getattr(ak, fn_name, None)
+        if not fn:
+            continue
+        try:
+            frame = fn(**kwargs)
+        except Exception:
+            continue
+        if hasattr(frame, "to_dict"):
+            rows.extend(frame.to_dict(orient="records"))
+    return rows
+
+
+def _load_akshare_market_rows(ak, ticker: str) -> list[dict]:
+    fn = getattr(ak, "stock_zh_a_hist", None)
+    if not fn:
+        raise RuntimeError("akshare 缺少 stock_zh_a_hist 接口")
+    frame = fn(symbol=ticker, period="daily", adjust="")
+    if hasattr(frame, "to_dict"):
+        return frame.to_dict(orient="records")
+    return []
 
 
 def _filing_response(filing: FilingModel) -> FilingResponse:

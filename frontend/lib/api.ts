@@ -92,6 +92,31 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  listAshareAnnouncements: (ticker: string, params?: Record<string, string | number | undefined>) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    });
+    const q = qs.toString();
+    return request(`/finance/ashare/companies/${encodeURIComponent(ticker)}/announcements${q ? `?${q}` : ""}`);
+  },
+  importAshareFiling: (ticker: string, data: object) =>
+    request(`/finance/ashare/companies/${encodeURIComponent(ticker)}/filings/import`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  syncAshareFacts: (ticker: string, data?: object) =>
+    request(`/finance/ashare/companies/${encodeURIComponent(ticker)}/facts/sync`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }),
+  syncAshareMarket: (ticker: string, data?: object) =>
+    request(`/finance/ashare/companies/${encodeURIComponent(ticker)}/market/sync`, {
+      method: "POST",
+      body: JSON.stringify(data || {}),
+    }),
+  getFilingFacts: (id: number) => request(`/finance/filings/${id}/facts`),
+  getMarketFacts: (ticker: string) => request(`/finance/companies/${encodeURIComponent(ticker)}/market-facts`),
   getFiling: (id: number) => request(`/finance/filings/${id}`),
   getFilingSections: (id: number) => request(`/finance/filings/${id}/sections`),
   bindFilingDocument: (id: number, data: object) =>

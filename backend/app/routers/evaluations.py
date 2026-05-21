@@ -1,6 +1,6 @@
 """Evaluation 路由 (v1.1)"""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import EvaluationRunModel, SettingsModel
@@ -13,13 +13,20 @@ router = APIRouter(prefix="/api/evaluations", tags=["Evaluations"])
 @router.post("/run", response_model=EvaluationResultResponse)
 def run(req: EvaluationRunRequest = EvaluationRunRequest(), db: Session = Depends(get_db)):
     settings = db.query(SettingsModel).first()
-    result = run_evaluation(
-        strategy=req.strategy,
-        chat_provider=(settings.chat_provider or settings.provider) if settings else None,
-        chat_model=settings.chat_model if settings else None,
-        embedding_provider=settings.embedding_provider if settings else None,
-        embedding_model=settings.embed_model if settings else None,
-    )
+    try:
+        result = run_evaluation(
+            strategy=req.strategy,
+            chat_provider=(settings.chat_provider or settings.provider) if settings else None,
+            chat_model=settings.chat_model if settings else None,
+            embedding_provider=settings.embedding_provider if settings else None,
+            embedding_model=settings.embed_model if settings else None,
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        status_code = 503 if "未配置" in message else 502
+        raise HTTPException(status_code, detail={"message": message}) from exc
+    except Exception as exc:
+        raise HTTPException(500, detail={"message": f"评估运行失败: {exc}"}) from exc
     save_evaluation_result(req.strategy, result)
 
     run_model = EvaluationRunModel(

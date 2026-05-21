@@ -18,6 +18,7 @@ function FinanceHomePageInner() {
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [ashareYear, setAshareYear] = useState(String(new Date().getFullYear() - 1));
   const [message, setMessage] = useState("");
 
   const load = () => {
@@ -51,13 +52,32 @@ function FinanceHomePageInner() {
     }
   };
 
+  const importAshareAnnual = async (symbol: string) => {
+    try {
+      const filing: any = await api.importAshareFiling(symbol, { fiscal_year: Number(ashareYear) });
+      setMessage(`${symbol} ${filing.fiscal_year} A 股年报已加入导入队列`);
+      load();
+    } catch (err: any) {
+      setMessage(`A 股导入失败: ${err.message}`);
+    }
+  };
+
+  const syncAshareMarket = async (symbol: string) => {
+    try {
+      const result: any = await api.syncAshareMarket(symbol, {});
+      setMessage(`${symbol} 行情事实已同步 ${result.upserted} 条`);
+    } catch (err: any) {
+      setMessage(`行情同步失败: ${err.message}`);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: font.xxl }}>财报分析工作台</h1>
           <p style={{ margin: "6px 0 0", color: colors.textSecondary, fontSize: font.sm }}>
-            SEC 10-K 导入、证据型 RAG、多步 Agent 分析与评估
+            SEC 10-K / A 股公告导入、证据型 RAG、多步 Agent 分析与评估
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -74,9 +94,10 @@ function FinanceHomePageInner() {
 
       <div style={card}>
         <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>添加公司</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr auto", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px auto", gap: 10 }}>
           <input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="Ticker, 如 AAPL" style={inputBase} />
           <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="公司名，可留空自动解析 SEC" style={inputBase} />
+          <input value={ashareYear} onChange={(e) => setAshareYear(e.target.value)} placeholder="A股年报年份" style={inputBase} />
           <button onClick={createCompany} style={btnPrimary}>添加</button>
         </div>
       </div>
@@ -93,6 +114,7 @@ function FinanceHomePageInner() {
               <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
                 <th style={th}>Ticker</th>
                 <th style={th}>公司</th>
+                <th style={th}>市场</th>
                 <th style={th}>CIK</th>
                 <th style={th}>Filings</th>
                 <th style={th}>操作</th>
@@ -105,10 +127,18 @@ function FinanceHomePageInner() {
                   <td style={{ ...td, cursor: "pointer", color: colors.accent }} onClick={() => router.push(`/finance/companies/${company.ticker}`)}>
                     {company.name}
                   </td>
+                  <td style={td}>{company.exchange || (isAshare(company.ticker) ? "CN" : "US")}</td>
                   <td style={td}>{company.cik || "-"}</td>
                   <td style={td}>{company.filing_count}</td>
                   <td style={td}>
-                    <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importLatest(company.ticker)}>导入最新 10-K</button>
+                    {isAshare(company.ticker) ? (
+                      <>
+                        <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importAshareAnnual(company.ticker)}>导入A股年报</button>
+                        <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => syncAshareMarket(company.ticker)}>同步行情</button>
+                      </>
+                    ) : (
+                      <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importLatest(company.ticker)}>导入最新 10-K</button>
+                    )}
                     <button style={btnGhost} onClick={() => router.push(`/finance/companies/${company.ticker}`)}>详情</button>
                   </td>
                 </tr>
@@ -155,6 +185,10 @@ function Metric({ title, value }: { title: string; value: string }) {
 
 function formatMetric(value: any) {
   return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "-";
+}
+
+function isAshare(ticker: string) {
+  return /^\d{6}$/.test(ticker);
 }
 
 const th: React.CSSProperties = { textAlign: "left", padding: "10px", fontSize: font.xs, color: colors.textMuted };

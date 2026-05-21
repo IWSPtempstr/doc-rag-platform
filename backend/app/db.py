@@ -230,6 +230,32 @@ def _ensure_v3_tables(conn):
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_financial_facts_id ON financial_facts (id)"))
 
+    if "market_facts" not in existing:
+        conn.execute(text("""
+            CREATE TABLE market_facts (
+                id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                company_id INTEGER NOT NULL,
+                ticker VARCHAR(20) NOT NULL,
+                trade_date VARCHAR(20) NOT NULL,
+                metric VARCHAR(120) NOT NULL,
+                label VARCHAR(300) NOT NULL,
+                value FLOAT,
+                unit VARCHAR(50),
+                source VARCHAR(120) DEFAULT 'akshare',
+                source_url VARCHAR(1000),
+                confidence FLOAT,
+                metadata_json JSON,
+                created_at DATETIME,
+                PRIMARY KEY (id),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (company_id) REFERENCES companies (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_id ON market_facts (id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_ticker ON market_facts (ticker)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_trade_date ON market_facts (trade_date)"))
+
     if "agent_runs" not in existing:
         conn.execute(text("""
             CREATE TABLE agent_runs (
