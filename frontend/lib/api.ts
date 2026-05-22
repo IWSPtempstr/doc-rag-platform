@@ -87,6 +87,14 @@ export const api = {
     const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
     return request(`/finance/companies/${encodeURIComponent(ticker)}${qs}`);
   },
+  deleteCompany: (ticker: string) =>
+    request(`/finance/companies/${encodeURIComponent(ticker)}`, { method: "DELETE" }),
+  getCompanyCoverage: (ticker: string) =>
+    request(`/finance/companies/${encodeURIComponent(ticker)}/coverage`),
+  listCompanyAgentRuns: (ticker: string, limit?: number) => {
+    const qs = limit ? `?limit=${limit}` : "";
+    return request(`/finance/companies/${encodeURIComponent(ticker)}/agent-runs${qs}`);
+  },
   importFiling: (ticker: string, data: object) =>
     request(`/finance/companies/${encodeURIComponent(ticker)}/filings/import`, {
       method: "POST",
@@ -118,11 +126,16 @@ export const api = {
   getFilingFacts: (id: number) => request(`/finance/filings/${id}/facts`),
   getMarketFacts: (ticker: string) => request(`/finance/companies/${encodeURIComponent(ticker)}/market-facts`),
   getFiling: (id: number) => request(`/finance/filings/${id}`),
+  deleteFiling: (id: number) =>
+    request(`/finance/filings/${id}`, { method: "DELETE" }),
   getFilingSections: (id: number) => request(`/finance/filings/${id}/sections`),
   bindFilingDocument: (id: number, data: object) =>
     request(`/finance/filings/${id}/bind-document`, { method: "POST", body: JSON.stringify(data) }),
   queryFinanceAgent: (data: object) =>
     request("/finance/agent/query", { method: "POST", body: JSON.stringify(data) }),
+  getConnectorStatus: () => request("/finance/connectors/status"),
+  testConnector: (name: string) =>
+    request(`/finance/connectors/${encodeURIComponent(name)}/test`, { method: "POST" }),
   runFinanceEvaluation: (data: object) =>
     request("/finance/evaluations/run", { method: "POST", body: JSON.stringify(data) }),
   listFinanceEvaluationResults: (workspace_id?: number) => {

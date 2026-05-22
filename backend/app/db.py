@@ -59,6 +59,69 @@ def ensure_sqlite_schema():
             },
         )
 
+        # Backfill legacy model names that no longer exist on the current provider.
+        conn.execute(
+            text(
+                """
+                UPDATE settings
+                SET
+                  provider = COALESCE(provider, :chat_provider),
+                  chat_provider = COALESCE(chat_provider, provider, :chat_provider),
+                  embedding_provider = COALESCE(embedding_provider, :embedding_provider),
+                  vision_provider = COALESCE(vision_provider, :vision_provider)
+                """
+            ),
+            {
+                "chat_provider": config.DEFAULT_CHAT_PROVIDER,
+                "embedding_provider": config.DEFAULT_EMBEDDING_PROVIDER,
+                "vision_provider": "openai",
+            },
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE settings
+                SET
+                  chat_model = CASE
+                    WHEN COALESCE(chat_provider, provider) = :chat_provider
+                         AND (chat_model IS NULL
+                              OR chat_model = :legacy_chat_model_1
+                              OR chat_model = :legacy_chat_model_2)
+                    THEN :chat_model
+                    ELSE chat_model
+                  END,
+                  embed_model = CASE
+                    WHEN COALESCE(embedding_provider, :embedding_provider) = :embedding_provider
+                         AND (embed_model IS NULL
+                              OR embed_model = :legacy_embed_model_1
+                              OR embed_model = :legacy_embed_model_2)
+                    THEN :embed_model
+                    ELSE embed_model
+                  END,
+                  vision_model = CASE
+                    WHEN COALESCE(vision_provider, :vision_provider) = :vision_provider
+                         AND (vision_model IS NULL
+                              OR vision_model = :legacy_vision_model)
+                    THEN :vision_model
+                    ELSE vision_model
+                  END
+                """
+            ),
+            {
+                "chat_provider": config.DEFAULT_CHAT_PROVIDER,
+                "embedding_provider": config.DEFAULT_EMBEDDING_PROVIDER,
+                "vision_provider": "openai",
+                "chat_model": config.DEFAULT_CHAT_MODEL,
+                "embed_model": config.DEFAULT_EMBED_MODEL,
+                "vision_model": config.VISION_MODEL,
+                "legacy_chat_model_1": "deepseek-v4-pro",
+                "legacy_chat_model_2": "deepseek-v4-flash",
+                "legacy_embed_model_1": "BAAI/bge-m3",
+                "legacy_embed_model_2": "nomic-embed-text",
+                "legacy_vision_model": "deepseek-v4-pro",
+            },
+        )
+
         # v2.0 — documents new columns
         doc_cols = conn.execute(text("PRAGMA table_info(documents)")).fetchall()
         doc_columns = {row[1] for row in doc_cols}

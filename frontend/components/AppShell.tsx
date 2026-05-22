@@ -13,15 +13,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         alignItems: "center", position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
       }}>
         <a href="/" style={{ color: "#fff", textDecoration: "none", fontWeight: 700, fontSize: 15, letterSpacing: "-0.3px" }}>
-          RAG Platform v3.0
+          财报分析工作台
         </a>
         {[
           ["/finance", "财报"],
-          ["/documents", "文档"],
-          ["/chat", "问答"],
+          ["/finance/connectors", "数据源"],
+          ["/documents", "资产"],
+          ["/finance/agent", "Agent"],
+          ["/finance/evaluations", "评估"],
           ["/settings", "设置"],
           ["/health", "健康"],
-          ["/evaluations", "评估"],
         ].map(([href, label]) => (
           <a key={href} href={href} style={navLinkStyle}>{label}</a>
         ))}

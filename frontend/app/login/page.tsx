@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { colors, font, card, inputBase, btnPrimary } from "@/lib/styles";
 
 export default function LoginPage() {
@@ -12,15 +12,22 @@ export default function LoginPage() {
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/finance";
+  const { user, loading, login: authLogin } = useAuth();
+  const redirect = useMemo(() => normalizeRedirect(searchParams.get("redirect")), [searchParams]);
   const [email, setEmail] = useState("admin@example.com");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
 
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace(redirect);
+    }
+  }, [loading, user, redirect, router]);
+
   const login = async () => {
     try {
-      await api.login(email, password, "Admin");
-      router.push(redirect);
+      await authLogin(email, password, "Admin");
+      router.replace(redirect);
     } catch (err: any) {
       setMessage(err.message);
     }
@@ -47,6 +54,12 @@ function LoginPageInner() {
     </div>
   );
 }
+
+function normalizeRedirect(value: string | null) {
+  if (!value || value === "/login" || value.startsWith("/login?")) return "/finance";
+  return value.startsWith("/") ? value : "/finance";
+}
+
 const label: React.CSSProperties = {
   display: "block",
   color: colors.textSecondary,
@@ -54,4 +67,3 @@ const label: React.CSSProperties = {
   fontWeight: 600,
   marginBottom: 5,
 };
-

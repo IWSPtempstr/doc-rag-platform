@@ -14,11 +14,13 @@ export default function HomePage() {
   }, []);
 
   const navCards = [
-    { title: "文档管理", desc: "上传、查看、管理文档", href: "/documents", icon: docIcon },
-    { title: "问答", desc: "RAG 智能问答 + 缓存", href: "/chat", icon: chatIcon },
+    { title: "财报工作台", desc: "公司、filings、A 股导入、RAG 问答", href: "/finance", icon: financeIcon },
+    { title: "数据源工作台", desc: "SEC / CNINFO / AKShare / Chroma 状态", href: "/finance/connectors", icon: sourceIcon },
+    { title: "文档资产", desc: "上传、查看、重新索引财报文档", href: "/documents", icon: docIcon },
+    { title: "Agent 分析", desc: "证据、事实、计算和校验轨迹", href: "/finance/agent", icon: agentIcon },
+    { title: "金融评估", desc: "SEC/FinQA/TAT-QA/custom 数据集评估", href: "/finance/evaluations", icon: evalIcon },
     { title: "设置", desc: "模型与 Provider 配置", href: "/settings", icon: settingsIcon },
     { title: "健康检查", desc: "系统组件状态监控", href: "/health", icon: healthIcon },
-    { title: "评估", desc: "Golden Questions 评估", href: "/evaluations", icon: evalIcon },
   ];
 
   return (
@@ -26,10 +28,10 @@ export default function HomePage() {
       {/* Hero */}
       <div style={{ textAlign: "center", marginBottom: 32, padding: "32px 0 8px" }}>
         <h1 style={{ fontSize: 32, fontWeight: 800, margin: "0 0 10px", color: colors.text, letterSpacing: "-0.5px" }}>
-          文档 RAG 平台 <span style={{ color: colors.accent }}>v2.0</span>
+          财报分析工作台 <span style={{ color: colors.accent }}>v2.1</span>
         </h1>
         <p style={{ color: colors.textSecondary, fontSize: font.md, margin: 0, lineHeight: 1.6 }}>
-          上传文档，多模态解析，智能问答，可追溯评估
+          SEC 10-K、A 股公告、公共金融 QA 数据集、可追溯 Agent 分析
         </p>
       </div>
 
@@ -89,9 +91,9 @@ export default function HomePage() {
       <div style={{ marginTop: 36, padding: 20, ...card }}>
         <h3 style={{ margin: "0 0 12px", fontSize: font.sm, fontWeight: 600, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: "0.5px" }}>功能清单</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "6px 24px" }}>
-          <Version title="v1" items={["文档上传/管理", "任务状态追踪", "RAG 问答", "Redis 缓存", "限流", "模型切换", "健康检查"]} />
-          <Version title="v1.1" items={["Hybrid Search (Dense+BM25+RRF)", "Rerank", "Trace (JSONL)", "Golden Questions 评估", "MCP 工具扩展", "Collections"]} />
-          <Version title="v2.0" items={["PDF 内图片提取 + Vision Caption", "图片上传", "文档重新索引", "图片资产管理", "文档详情页", "Docker 健康检查"]} />
+          <Version title="数据入口" items={["SEC EDGAR 10-K", "CNINFO A 股公告", "本地财报上传", "FinQA / TAT-QA"]} />
+          <Version title="分析链路" items={["Chroma 检索", "结构化 FinancialFact", "确定性计算", "Verifier 校验"]} />
+          <Version title="工程能力" items={["LangGraph MAS", "MCP 工具", "覆盖报告", "每日 A 股日更"]} />
         </div>
       </div>
     </div>
@@ -110,7 +112,9 @@ const Version = ({ title, items }: { title: string; items: string[] }) => (
 );
 
 const docIcon = <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></>;
-const chatIcon = <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></>;
+const financeIcon = <><path d="M3 21h18" /><path d="M5 21V7l8-4 6 4v14" /><path d="M9 21v-6h6v6" /><path d="M9 10h.01" /><path d="M15 10h.01" /></>;
+const sourceIcon = <><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></>;
+const agentIcon = <><path d="M12 8V4H8" /><rect x="4" y="8" width="16" height="12" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M9 13h.01" /><path d="M15 13h.01" /><path d="M10 17h4" /></>;
 const settingsIcon = <><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></>;
 const healthIcon = <><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></>;
 const evalIcon = <><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>;

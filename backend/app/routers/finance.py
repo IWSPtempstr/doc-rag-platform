@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import config
 from app.db import get_db
 from app.models import (
+    AgentRunModel,
     CompanyModel,
     DocumentModel,
     EvalCaseModel,
@@ -65,8 +67,19 @@ from app.services.finance_sections import parse_10k_sections
 from app.services.sec_connector import download_filing_document, find_10k_filing, load_filing_text, parse_sec_date, resolve_ticker
 from app.services.ashare_connector import download_announcement, get_annual_report, search_announcements
 from app.services.ashare_structured_provider import load_akshare_provider, normalize_financial_value
+from app.services.vector_store import count_chunks, collection_count, delete_document as chroma_delete
 
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
+
+
+_ASHARE_METRIC_LABELS = {
+    "Revenues": "营业总收入",
+    "NetIncomeLoss": "净利润",
+    "OperatingIncomeLoss": "营业利润",
+    "Assets": "资产总计",
+    "Liabilities": "负债合计",
+    "OperatingCashFlow": "经营活动产生的现金流量净额",
+}
 
 
 @router.get("/companies", response_model=list[CompanyResponse])
@@ -145,6 +158,60 @@ def get_company(
         "company": CompanyResponse.model_validate(company).model_dump(),
         "filings": [_filing_response(f).model_dump() for f in company.filings],
     }
+
+
+@router.delete("/companies/{ticker}", response_model=dict)
+def delete_company(
+    ticker: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    company = _get_company_or_404(db, workspace.id, ticker)
+    return _delete_company_graph(db, company)
+
+
+@router.get("/companies/{ticker}/coverage", response_model=dict)
+def get_company_coverage(
+    ticker: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    company = _get_company_or_404(db, workspace.id, ticker)
+    return _build_company_coverage(db, workspace.id, company)
+
+
+@router.get("/companies/{ticker}/agent-runs", response_model=list[dict])
+def list_company_agent_runs(
+    ticker: str,
+    limit: int = Query(default=10, ge=1, le=50),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    company = _get_company_or_404(db, workspace.id, ticker)
+    runs = (
+        db.query(AgentRunModel)
+        .filter(AgentRunModel.workspace_id == workspace.id, AgentRunModel.company_id == company.id)
+        .order_by(AgentRunModel.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": run.id,
+            "filing_id": run.filing_id,
+            "question": run.question,
+            "mode": run.mode,
+            "status": run.status,
+            "answer_preview": (run.answer or "")[:240],
+            "verification": run.verification or {},
+            "created_at": run.created_at,
+            "completed_at": run.completed_at,
+        }
+        for run in runs
+    ]
 
 
 @router.post("/companies/{ticker}/filings/import", response_model=FilingResponse)
@@ -269,6 +336,17 @@ def import_ashare_filing(
     db.commit()
     db.refresh(filing)
     db.refresh(job)
+    try:
+        synced = _sync_ashare_facts_for_filing(db, company, filing)
+        metadata = filing.metadata_json or {}
+        metadata["auto_fact_sync"] = {"status": "completed", "upserted": synced, "provider": "akshare"}
+        filing.metadata_json = metadata
+        db.commit()
+    except Exception as exc:
+        metadata = filing.metadata_json or {}
+        metadata["auto_fact_sync"] = {"status": "failed", "provider": "akshare", "failure_reason": str(exc)}
+        filing.metadata_json = metadata
+        db.commit()
     enqueue_job(job.id, doc.id, doc.stored_path, doc.content_type)
     return _filing_response(filing)
 
@@ -284,6 +362,19 @@ def get_filing(
         raise HTTPException(404, "财报不存在")
     _verify_workspace_access(db, current_user.id, filing.workspace_id)
     return _filing_response(filing)
+
+
+@router.delete("/filings/{filing_id}", response_model=dict)
+def delete_filing(
+    filing_id: int,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    filing = db.query(FilingModel).filter(FilingModel.id == filing_id).first()
+    if not filing:
+        raise HTTPException(404, "财报不存在")
+    _verify_workspace_access(db, current_user.id, filing.workspace_id)
+    return _delete_filing_graph(db, filing)
 
 
 @router.get("/filings/{filing_id}/sections", response_model=list[FilingSectionResponse])
@@ -337,40 +428,9 @@ def sync_ashare_financial_facts(
     if not filing:
         raise HTTPException(400, "请先导入该公司的 A 股年报 filing，再同步结构化财务事实")
     try:
-        ak = load_akshare_provider()
-        rows = _load_akshare_financial_rows(ak, company.ticker)
+        upserted = _sync_ashare_facts_for_filing(db, company, filing)
     except Exception as exc:
         raise HTTPException(503, str(exc)) from exc
-
-    upserted = 0
-    metric_labels = {
-        "Revenues": "营业总收入",
-        "NetIncomeLoss": "净利润",
-        "OperatingIncomeLoss": "营业利润",
-        "Assets": "资产总计",
-        "Liabilities": "负债合计",
-        "OperatingCashFlow": "经营活动产生的现金流量净额",
-    }
-    for row in rows:
-        period = _report_period_from_row(row, filing.fiscal_year)
-        if req.fiscal_year and str(req.fiscal_year) not in period:
-            continue
-        for metric, label in metric_labels.items():
-            value = normalize_financial_value(row.get(label))
-            if value is None:
-                continue
-            _upsert_financial_fact(
-                db,
-                filing.id,
-                metric=metric,
-                label=label,
-                value=value,
-                period=period,
-                source="akshare",
-                evidence=f"{company.ticker} {period} {label}",
-            )
-            upserted += 1
-    db.commit()
     return {"company_id": company.id, "filing_id": filing.id, "upserted": upserted, "provider": req.provider}
 
 
@@ -570,6 +630,45 @@ def finance_summary(
     }
 
 
+@router.get("/connectors/status", response_model=dict)
+def connector_status(
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    return {
+        "connectors": _build_connector_status_rows(db, workspace.id),
+        "daily_jobs": [_build_ashare_daily_job_status(db, workspace.id)],
+    }
+
+
+@router.post("/connectors/{name}/test", response_model=dict)
+def test_connector(
+    name: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+):
+    _user, _workspace = ws
+    catalog = {item["name"]: item for item in _build_connector_status_catalog()}
+    if name not in catalog:
+        raise HTTPException(404, "数据源不存在")
+    try:
+        if name == "sec_edgar":
+            resolve_ticker("AAPL")
+        elif name == "cninfo":
+            search_announcements("600519", keyword="2023年年度报告", page_size=1)
+        elif name == "akshare":
+            load_akshare_provider()
+        elif name in {"finqa", "tatqa"}:
+            import datasets  # type: ignore  # noqa: F401
+        elif name == "chroma":
+            collection_count()
+        else:
+            raise ValueError("未定义连接测试")
+        return {**catalog[name], "status": "available", "failure_reason": None}
+    except Exception as exc:
+        return {**catalog[name], "status": "unavailable", "failure_reason": str(exc)}
+
+
 # ── Dataset endpoints ──────────────────────────────────────
 
 @router.get("/datasets", response_model=list[EvalDatasetResponse])
@@ -717,6 +816,329 @@ def update_eval_case(
 
 
 # ── Helpers ────────────────────────────────────────────────
+
+def _build_connector_status_catalog() -> list[dict]:
+    return [
+        {
+            "name": "sec_edgar",
+            "label": "SEC EDGAR",
+            "category": "disclosure",
+            "source": "https://www.sec.gov/edgar",
+            "capabilities": ["10-K import", "CompanyFacts", "XBRL facts"],
+        },
+        {
+            "name": "cninfo",
+            "label": "巨潮资讯 CNINFO",
+            "category": "disclosure",
+            "source": "http://www.cninfo.com.cn",
+            "capabilities": ["A 股公告搜索", "年报 PDF 下载", "公告元数据"],
+        },
+        {
+            "name": "akshare",
+            "label": "AKShare",
+            "category": "structured_data",
+            "source": "https://akshare.akfamily.xyz",
+            "capabilities": ["A 股结构化财务事实", "A 股行情事实"],
+        },
+        {
+            "name": "finqa",
+            "label": "FinQA",
+            "category": "evaluation",
+            "source": "https://huggingface.co/datasets/ibm-research/finqa",
+            "capabilities": ["数值推理评估", "公开 benchmark sample"],
+        },
+        {
+            "name": "tatqa",
+            "label": "TAT-QA",
+            "category": "evaluation",
+            "source": "https://huggingface.co/datasets/next-tat/TAT-QA",
+            "capabilities": ["表格/文本混合问答评估", "公开 benchmark sample"],
+        },
+        {
+            "name": "chroma",
+            "label": "Chroma Index",
+            "category": "index",
+            "source": "local",
+            "capabilities": ["向量索引", "filing/company metadata filter"],
+        },
+    ]
+
+
+def _build_connector_status_rows(db: Session, workspace_id: int) -> list[dict]:
+    rows = _build_connector_status_catalog()
+    filings = db.query(FilingModel).filter(FilingModel.workspace_id == workspace_id).all()
+    datasets = db.query(EvalDatasetModel).filter(EvalDatasetModel.workspace_id == workspace_id).all()
+    facts = (
+        db.query(FinancialFactModel)
+        .join(FilingModel, FilingModel.id == FinancialFactModel.filing_id)
+        .filter(FilingModel.workspace_id == workspace_id)
+        .all()
+    )
+    market_fact_count = db.query(MarketFactModel).filter(MarketFactModel.workspace_id == workspace_id).count()
+
+    dataset_by_source = {ds.source: ds for ds in datasets}
+    for row in rows:
+        name = row["name"]
+        row["status"] = "configured"
+        row["failure_reason"] = None
+        row["last_sync_at"] = None
+        row["coverage"] = {}
+        if name == "sec_edgar":
+            sec_filings = [f for f in filings if f.filing_type == "10-K"]
+            row["coverage"] = {
+                "filings": len(sec_filings),
+                "facts": len([f for f in facts if f.source == "sec_xbrl"]),
+            }
+            row["last_sync_at"] = max((f.created_at for f in sec_filings), default=None)
+        elif name == "cninfo":
+            ashare_filings = [f for f in filings if f.filing_type in {"annual_report", "semi_annual_report", "quarterly_report"}]
+            row["coverage"] = {"filings": len(ashare_filings)}
+            row["last_sync_at"] = max((f.created_at for f in ashare_filings), default=None)
+        elif name == "akshare":
+            row["coverage"] = {
+                "financial_facts": len([f for f in facts if f.source == "akshare"]),
+                "market_facts": market_fact_count,
+            }
+        elif name in {"finqa", "tatqa"}:
+            ds = dataset_by_source.get(name)
+            row["coverage"] = {"datasets": 1 if ds else 0, "cases": ds.case_count if ds else 0}
+            row["last_sync_at"] = ds.created_at if ds else None
+        elif name == "chroma":
+            row["coverage"] = {"chunks": collection_count()}
+    return rows
+
+
+def _build_ashare_daily_job_status(db: Session, workspace_id: int) -> dict:
+    ashare_filings = (
+        db.query(FilingModel)
+        .filter(
+            FilingModel.workspace_id == workspace_id,
+            FilingModel.filing_type.in_(["annual_report", "semi_annual_report", "quarterly_report"]),
+        )
+        .order_by(FilingModel.created_at.desc())
+        .limit(1)
+        .all()
+    )
+    latest_fact = (
+        db.query(FinancialFactModel)
+        .join(FilingModel, FilingModel.id == FinancialFactModel.filing_id)
+        .filter(FilingModel.workspace_id == workspace_id, FinancialFactModel.source == "akshare")
+        .order_by(FinancialFactModel.created_at.desc())
+        .first()
+    )
+    latest_market_fact = (
+        db.query(MarketFactModel)
+        .filter(MarketFactModel.workspace_id == workspace_id)
+        .order_by(MarketFactModel.created_at.desc())
+        .first()
+    )
+
+    timestamps = [
+        item for item in [
+            ashare_filings[0].created_at if ashare_filings else None,
+            latest_fact.created_at if latest_fact else None,
+            latest_market_fact.created_at if latest_market_fact else None,
+        ] if item is not None
+    ]
+    last_run_at = max(timestamps) if timestamps else None
+
+    failure_reason = None
+    if ashare_filings:
+        auto_sync = (ashare_filings[0].metadata_json or {}).get("auto_fact_sync") or {}
+        if auto_sync.get("status") == "failed":
+            failure_reason = auto_sync.get("failure_reason") or "A 股结构化事实同步失败"
+
+    return {
+        "name": "A 股公开数据日更",
+        "source": "cninfo+akshare",
+        "schedule": "03:00 Asia/Shanghai",
+        "status": "failed" if failure_reason else ("success" if last_run_at else "configured"),
+        "last_run_at": last_run_at,
+        "next_run_at": _next_daily_run_at(hour=3, utc_offset_hours=8),
+        "failure_reason": failure_reason,
+    }
+
+
+def _delete_filing_graph(db: Session, filing: FilingModel) -> dict:
+    document = db.query(DocumentModel).filter(DocumentModel.id == filing.document_id).first() if filing.document_id else None
+    db.query(EvalCaseModel).filter(EvalCaseModel.gold_filing_id == filing.id).update(
+        {"gold_filing_id": None, "gold_document_id": None},
+        synchronize_session=False,
+    )
+    db.query(AgentRunModel).filter(AgentRunModel.filing_id == filing.id).update(
+        {"filing_id": None},
+        synchronize_session=False,
+    )
+
+    sections_deleted = db.query(FilingSectionModel).filter(FilingSectionModel.filing_id == filing.id).delete(synchronize_session=False)
+    facts_deleted = db.query(FinancialFactModel).filter(FinancialFactModel.filing_id == filing.id).delete(synchronize_session=False)
+    db.delete(filing)
+    db.flush()
+
+    documents_deleted = 0
+    if document:
+        other_refs = db.query(FilingModel).filter(FilingModel.document_id == document.id).count()
+        if other_refs == 0:
+            if os.path.exists(document.stored_path):
+                try:
+                    os.remove(document.stored_path)
+                except Exception:
+                    pass
+            try:
+                chroma_delete(document.id)
+            except Exception:
+                pass
+            db.delete(document)
+            documents_deleted = 1
+    db.commit()
+    return {
+        "ok": True,
+        "filings_deleted": 1,
+        "sections_deleted": sections_deleted,
+        "facts_deleted": facts_deleted,
+        "documents_deleted": documents_deleted,
+    }
+
+
+def _delete_company_graph(db: Session, company: CompanyModel) -> dict:
+    filings = list(company.filings)
+    documents_deleted = 0
+    sections_deleted = 0
+    facts_deleted = 0
+    for filing in filings:
+        result = _delete_filing_graph(db, filing)
+        documents_deleted += result.get("documents_deleted", 0)
+        sections_deleted += result.get("sections_deleted", 0)
+        facts_deleted += result.get("facts_deleted", 0)
+
+    db.query(MarketFactModel).filter(MarketFactModel.company_id == company.id).delete(synchronize_session=False)
+    db.query(AgentRunModel).filter(AgentRunModel.company_id == company.id).update(
+        {"company_id": None},
+        synchronize_session=False,
+    )
+    db.delete(company)
+    db.commit()
+    return {
+        "ok": True,
+        "companies_deleted": 1,
+        "filings_deleted": len(filings),
+        "documents_deleted": documents_deleted,
+        "sections_deleted": sections_deleted,
+        "facts_deleted": facts_deleted,
+    }
+
+
+def _next_daily_run_at(hour: int, utc_offset_hours: int) -> datetime:
+    tz = timezone(timedelta(hours=utc_offset_hours))
+    now = datetime.now(tz)
+    next_run = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if next_run <= now:
+        next_run += timedelta(days=1)
+    return next_run
+
+
+def _build_company_coverage(db: Session, workspace_id: int, company: CompanyModel) -> dict:
+    filings = (
+        db.query(FilingModel)
+        .filter(FilingModel.workspace_id == workspace_id, FilingModel.company_id == company.id)
+        .order_by(FilingModel.fiscal_year.desc(), FilingModel.created_at.desc())
+        .all()
+    )
+    document_ids = [f.document_id for f in filings if f.document_id]
+    documents = db.query(DocumentModel).filter(DocumentModel.id.in_(document_ids)).all() if document_ids else []
+    sections = (
+        db.query(FilingSectionModel)
+        .filter(FilingSectionModel.filing_id.in_([f.id for f in filings]))
+        .all()
+        if filings else []
+    )
+    facts = (
+        db.query(FinancialFactModel)
+        .filter(FinancialFactModel.filing_id.in_([f.id for f in filings]))
+        .all()
+        if filings else []
+    )
+    market_fact_count = (
+        db.query(MarketFactModel)
+        .filter(MarketFactModel.workspace_id == workspace_id, MarketFactModel.company_id == company.id)
+        .count()
+    )
+    chroma_chunks = sum(count_chunks(doc.id) for doc in documents)
+    flags = []
+    if not filings:
+        flags.append("missing_filing")
+    if documents and chroma_chunks == 0:
+        flags.append("document_not_indexed")
+    if filings and not sections:
+        flags.append("missing_section")
+    if filings and not facts:
+        flags.append("missing_financial_fact")
+    return {
+        "company_id": company.id,
+        "ticker": company.ticker,
+        "document_count": len(documents),
+        "filing_count": len(filings),
+        "chunk_count": sum(doc.chunk_count or 0 for doc in documents),
+        "chroma_chunk_count": chroma_chunks,
+        "section_count": len(sections),
+        "financial_fact_count": len(facts),
+        "market_fact_count": market_fact_count,
+        "indexed_document_count": len([doc for doc in documents if doc.status == "completed" and (doc.chunk_count or 0) > 0]),
+        "failure_flags": flags,
+        "filings": [
+            {
+                "id": filing.id,
+                "filing_type": filing.filing_type,
+                "fiscal_year": filing.fiscal_year,
+                "status": filing.status,
+                "document_id": filing.document_id,
+                "metadata_json": filing.metadata_json,
+            }
+            for filing in filings
+        ],
+    }
+
+
+def _extract_ashare_financial_facts(rows: list[dict], fiscal_year: int | None, ticker: str) -> list[dict]:
+    facts: list[dict] = []
+    for row in rows:
+        period = _report_period_from_row(row, fiscal_year)
+        if fiscal_year and str(fiscal_year) not in period:
+            continue
+        for metric, label in _ASHARE_METRIC_LABELS.items():
+            value = normalize_financial_value(row.get(label))
+            if value is None:
+                continue
+            facts.append({
+                "metric": metric,
+                "label": label,
+                "value": value,
+                "period": period,
+                "unit": "CNY",
+                "source": "akshare",
+                "evidence": f"{ticker} {period} {label}",
+            })
+    return facts
+
+
+def _sync_ashare_facts_for_filing(db: Session, company: CompanyModel, filing: FilingModel) -> int:
+    ak = load_akshare_provider()
+    rows = _load_akshare_financial_rows(ak, company.ticker)
+    facts = _extract_ashare_financial_facts(rows, filing.fiscal_year, company.ticker)
+    for fact in facts:
+        _upsert_financial_fact(
+            db,
+            filing.id,
+            metric=fact["metric"],
+            label=fact["label"],
+            value=fact["value"],
+            period=fact["period"],
+            source=fact["source"],
+            evidence=fact["evidence"],
+        )
+    db.commit()
+    return len(facts)
+
 
 def _verify_workspace_access(db: Session, user_id: int, workspace_id: int) -> None:
     membership = (

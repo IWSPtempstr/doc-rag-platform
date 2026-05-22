@@ -21,6 +21,7 @@ interface AuthState {
   user: User | null;
   workspaces: Workspace[];
   loading: boolean;
+  login: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -28,6 +29,7 @@ const AuthContext = createContext<AuthState>({
   user: null,
   workspaces: [],
   loading: true,
+  login: async () => {},
   logout: async () => {},
 });
 
@@ -52,6 +54,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { checkAuth(); }, [checkAuth]);
 
+  const login = useCallback(async (email: string, password: string, name?: string) => {
+    const data: any = await api.login(email, password, name);
+    setUser(data.user);
+    setWorkspaces(data.workspaces || []);
+    setLoading(false);
+    return data;
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.logout();
@@ -62,7 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   return (
-    <AuthContext.Provider value={{ user, workspaces, loading, logout }}>
+    <AuthContext.Provider value={{ user, workspaces, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

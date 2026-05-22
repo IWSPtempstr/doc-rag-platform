@@ -130,6 +130,28 @@ export interface Company {
   filing_count: number;
 }
 
+export interface CompanyCoverage {
+  company_id: number;
+  ticker: string;
+  document_count: number;
+  filing_count: number;
+  chunk_count: number;
+  chroma_chunk_count: number;
+  section_count: number;
+  financial_fact_count: number;
+  market_fact_count: number;
+  indexed_document_count: number;
+  failure_flags: string[];
+  filings: Array<{
+    id: number;
+    filing_type: string;
+    fiscal_year: number;
+    status: string;
+    document_id: number | null;
+    metadata_json: Record<string, any> | null;
+  }>;
+}
+
 export interface Filing {
   id: number;
   workspace_id: number;
@@ -167,6 +189,43 @@ export interface FinanceAgentResult {
   agent_run_id: number;
   steps: any[];
   verification: Record<string, any>;
+}
+
+export interface AgentRunSummary {
+  id: number;
+  filing_id: number | null;
+  question: string;
+  mode: string;
+  status: string;
+  answer_preview: string;
+  verification: Record<string, any>;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface ConnectorStatusRow {
+  name: string;
+  label: string;
+  category: string;
+  source: string;
+  capabilities: string[];
+  status: string;
+  failure_reason: string | null;
+  last_sync_at: string | null;
+  coverage: Record<string, any>;
+}
+
+export interface ConnectorStatusResponse {
+  connectors: ConnectorStatusRow[];
+  daily_jobs: Array<{
+    name: string;
+    source: string;
+    schedule: string;
+    status: string;
+    last_run_at: string | null;
+    next_run_at: string | null;
+    failure_reason: string | null;
+  }>;
 }
 
 export interface FinanceEvalResult {

@@ -10,7 +10,7 @@ from typing import Any, TypedDict
 from sqlalchemy.orm import Session
 
 from app.config import config
-from app.models import AgentRunModel, AgentStepModel, CompanyModel, FilingModel, FinancialFactModel, SettingsModel
+from app.models import AgentRunModel, AgentStepModel, CompanyModel, FilingModel, FinancialFactModel, MarketFactModel, SettingsModel
 from app.services.embedding_provider import embed_single
 from app.services.vector_store import query as vector_query
 
@@ -32,6 +32,7 @@ class FinanceAgentState(TypedDict, total=False):
     facts_done: bool
     calculation_done: bool
     analysis_done: bool
+    tool_groups: list[str]
 
 
 def run_finance_agent(
@@ -82,6 +83,7 @@ def run_finance_agent(
         "filing_id": filing.id,
         "question": question,
         "mode": mode,
+        "tool_groups": classify_finance_tool_groups(question),
         "supervisor_phase": "retrieval",
         "retrieval_count": 0,
     }
@@ -228,7 +230,9 @@ def _supervisor_node(db: Session, state: FinanceAgentState) -> FinanceAgentState
 def _supervisor_router(state: FinanceAgentState) -> str:
     if state.get("verification") is not None:
         return "done"
-    if not state.get("citations") and state.get("retrieval_count", 0) < _MAX_RETRIEVAL_ATTEMPTS:
+    groups = set(state.get("tool_groups", []))
+    needs_document_retrieval = bool(groups & {"filing_retrieval", "announcement_search"})
+    if needs_document_retrieval and not state.get("citations") and state.get("retrieval_count", 0) < _MAX_RETRIEVAL_ATTEMPTS:
         return "retrieval"
     if not state.get("facts_done"):
         return "facts"
@@ -259,6 +263,29 @@ def _retrieval_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     return state
 
 
+def classify_finance_tool_groups(question: str) -> list[str]:
+    """Route finance questions to a small, explicit tool group set."""
+    q = question.lower()
+    groups: set[str] = set()
+    if any(term in q for term in ("公告", "年报", "披露", "announcement", "filing", "annual report")):
+        groups.add("announcement_search")
+        groups.add("filing_retrieval")
+    if any(term in q for term in ("风险", "risk", "item 1a", "摘要", "summary", "章节", "section", "引用", "证据")):
+        groups.add("filing_retrieval")
+    if any(term in q for term in ("营收", "收入", "净利润", "利润", "资产", "负债", "现金流", "revenue", "income", "assets", "liabilities", "cash flow")):
+        groups.add("structured_facts")
+    if any(term in q for term in ("率", "margin", "ratio", "growth", "同比", "增速", "计算", "compare", "对比")):
+        groups.add("calculation")
+        groups.add("structured_facts")
+    if any(term in q for term in ("股价", "收盘", "开盘", "最高", "最低", "成交量", "市值", "行情", "price", "close", "open", "volume", "market cap")):
+        groups.add("market_facts")
+    if any(term in q for term in ("评估", "benchmark", "dataset", "case", "命中率", "evidence_recall")):
+        groups.add("evaluation")
+    if not groups:
+        groups.update({"filing_retrieval", "structured_facts"})
+    return sorted(groups)
+
+
 # Metric alias map — user-facing names → canonical XBRL metric names
 _METRIC_ALIAS = {
     "revenue": "Revenues",
@@ -279,31 +306,67 @@ _MAX_RETRIEVAL_ATTEMPTS = 2
 def _fact_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     filing_id = state.get("filing_id")
     facts: list[dict] = []
+    groups = set(state.get("tool_groups", []))
 
-    # ── 1) Load canonical XBRL facts from DB ──
+    # ── 1) Load canonical/structured facts from DB ──
     canonical: dict[str, FinancialFactModel] = {}
     if filing_id:
         rows = (
             db.query(FinancialFactModel)
-            .filter(FinancialFactModel.filing_id == filing_id, FinancialFactModel.source == "sec_xbrl")
+            .filter(FinancialFactModel.filing_id == filing_id)
             .all()
         )
+        source_rank = {"sec_xbrl": 3, "akshare": 2, "structured": 1, "agent_extracted": 0}
         for row in rows:
-            canonical[row.metric] = row
+            current = canonical.get(row.metric)
+            if not current or source_rank.get(row.source or "", 0) > source_rank.get(current.source or "", 0):
+                canonical[row.metric] = row
+
+    if "market_facts" in groups:
+        company = (
+            db.query(CompanyModel)
+            .filter(CompanyModel.workspace_id == state["workspace_id"], CompanyModel.ticker == state["company_ticker"])
+            .first()
+        )
+        if company:
+            market_rows = (
+                db.query(MarketFactModel)
+                .filter(MarketFactModel.workspace_id == state["workspace_id"], MarketFactModel.company_id == company.id)
+                .order_by(MarketFactModel.trade_date.desc(), MarketFactModel.metric.asc())
+                .limit(12)
+                .all()
+            )
+            for row in market_rows:
+                facts.append({
+                    "metric": row.metric,
+                    "canonical_metric": row.metric,
+                    "label": row.label,
+                    "value": row.value,
+                    "unit": row.unit,
+                    "period": row.trade_date,
+                    "source": "market_fact",
+                    "confidence": row.confidence or 1.0,
+                    "evidence": f"{row.ticker} {row.trade_date} {row.label}={row.value}",
+                })
 
     # ── 2) Build fact list from canonical XBRL ──
     for alias, canon_metric in _METRIC_ALIAS.items():
-        if canon_metric in canonical:
-            row = canonical[canon_metric]
+        candidate_metrics = [canon_metric]
+        if alias == "operating_cash_flow":
+            candidate_metrics.append("OperatingCashFlow")
+        metric = next((m for m in candidate_metrics if m in canonical), None)
+        if metric:
+            row = canonical[metric]
             facts.append({
                 "metric": alias,
-                "canonical_metric": canon_metric,
-                "label": canon_metric,
+                "canonical_metric": metric,
+                "label": metric,
                 "value": row.value,
-                "unit": row.unit or "USD",
-                "source": "sec_xbrl",
+                "unit": row.unit or ("CNY" if row.source == "akshare" else "USD"),
+                "period": row.period,
+                "source": row.source,
                 "confidence": row.confidence or 0.95,
-                "evidence": f"XBRL {canon_metric} = {row.value}",
+                "evidence": row.evidence or f"{row.source} {metric} = {row.value}",
             })
 
     # Also include any canonical metrics not in the alias map
@@ -451,27 +514,39 @@ def _analysis_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
             lines.append("当前没有检索到足够的 10-K 证据。")
     elif facts or calculations:
         lines = [f"{ticker} 10-K 分析结果："]
-        canonical_facts = [f for f in facts if f.get("source") == "sec_xbrl"]
-        if canonical_facts:
+        structured_facts = [
+            f for f in facts
+            if f.get("source") in {"sec_xbrl", "akshare", "structured", "market_fact"}
+        ]
+        if structured_facts:
             value_strs = []
-            for f in canonical_facts:
+            source_labels = {
+                "sec_xbrl": "SEC XBRL",
+                "akshare": "AKShare",
+                "structured": "结构化模型",
+                "market_fact": "行情事实",
+            }
+            used_sources = sorted({source_labels.get(f.get("source"), str(f.get("source"))) for f in structured_facts})
+            for f in structured_facts:
                 v = f.get("value")
                 if v is not None:
                     raw = f"{v:.0f}" if isinstance(v, float) and v == int(v) else str(v)
+                    unit = f.get("unit") or ""
                     if v >= 1_000_000_000:
-                        value_strs.append(f"{f['label']}=${v/1e9:.2f}B")
+                        value_strs.append(f"{f['label']}={v/1e9:.2f}B {unit}".strip())
                     elif v >= 1_000_000:
-                        value_strs.append(f"{f['label']}=${v/1e6:.1f}M")
+                        value_strs.append(f"{f['label']}={v/1e6:.1f}M {unit}".strip())
                     else:
-                        value_strs.append(f"{f['label']}={raw}")
+                        value_strs.append(f"{f['label']}={raw} {unit}".strip())
             if value_strs:
-                lines.append("依据 XBRL 结构化数据：" + "；".join(value_strs))
+                source_text = "、".join(used_sources) if used_sources else "结构化数据"
+                lines.append(f"依据{source_text}结构化数据：" + "；".join(value_strs))
         if calculations:
             for c in calculations:
                 lines.append(f"计算结果：{c['label']}={c['value']}")
         if citations:
             lines.append("以上结论基于 10-K 原始检索片段，详见 citations。")
-        else:
+        elif not structured_facts:
             lines.append("当前没有检索到足够的 10-K 证据，分析可信度较低。")
     else:
         lines = [f"{ticker} 10-K 分析结果："]
@@ -492,16 +567,22 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     question = state.get("question", "").lower()
 
     # ── 1) Basic checks ──
-    if not citations:
+    groups = set(state.get("tool_groups", []))
+    has_structured_grounding = any(
+        fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "structured"}
+        for fact in facts
+    ) or bool(state.get("calculations"))
+    citation_required = bool(groups & {"filing_retrieval", "announcement_search"}) or not has_structured_grounding
+    if citation_required and not citations:
         errors.append("缺少引用证据")
     if not answer:
         errors.append("缺少最终回答")
 
-    # ── 2) Fact consistency — trust canonical, verify regex ──
+    # ── 2) Fact consistency — trust canonical/structured facts, verify regex ──
     for fact in facts:
         source = fact.get("source", "")
-        if source == "sec_xbrl":
-            continue  # Canonical XBRL facts are trusted
+        if source in {"sec_xbrl", "akshare", "market_fact", "structured"}:
+            continue
         # Text regex facts: check evidence consistency
         evidence = fact.get("evidence", "")
         value = fact.get("value")
@@ -551,10 +632,16 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     # ── 5) Unsupported claims in answer — only for non-canonical numbers ──
     cited_text = " ".join(c.get("content", "") for c in citations)
     answer_numbers = re.findall(r"[\d,]+\.?\d*\s*(?:million|billion|%|percent)?", answer, flags=re.I)
+    ignored_numbers = set()
+    ticker_digits = re.sub(r"\D", "", state.get("company_ticker", ""))
+    if ticker_digits:
+        ignored_numbers.add(ticker_digits)
+    for year in re.findall(r"(19\d{2}|20\d{2})", question):
+        ignored_numbers.add(year)
     # Collect all canonical fact values as "supported"
     supported_numbers: set[str] = set()
     for fact in facts:
-        if fact.get("source") == "sec_xbrl" and fact.get("value") is not None:
+        if fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "structured"} and fact.get("value") is not None:
             v = fact["value"]
             supported_numbers.add(str(v))
             supported_numbers.add(str(round(v)))
@@ -570,6 +657,7 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
         n.strip() for n in answer_numbers
         if n.strip() and any(ch.isdigit() for ch in n)
         and not (n.strip() == "10" and "10-K" in answer)
+        and re.sub(r"[^0-9.]", "", n.strip()) not in ignored_numbers
         and n.strip() not in cited_text
         and not any(str(sn) in n for sn in supported_numbers if sn)
     ]
@@ -586,6 +674,9 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
         "citation_coverage": coverage,
         "numeric_checks": len(calculations),
         "canonical_facts_used": len([f for f in facts if f.get("source") == "sec_xbrl"]),
+        "structured_facts_used": len([f for f in facts if f.get("source") in {"sec_xbrl", "akshare", "structured"}]),
+        "market_facts_used": len([f for f in facts if f.get("source") == "market_fact"]),
+        "tool_groups": state.get("tool_groups", []),
         "is_abstain": is_abstaining,
         "asking_non_disclosed": asking_non_disclosed,
     }
@@ -650,4 +741,5 @@ def _summarize_state(state: FinanceAgentState) -> dict[str, Any]:
         "calculations": len(state.get("calculations", [])),
         "verification": state.get("verification"),
         "answer_preview": (state.get("answer") or "")[:240],
+        "tool_groups": state.get("tool_groups", []),
     }

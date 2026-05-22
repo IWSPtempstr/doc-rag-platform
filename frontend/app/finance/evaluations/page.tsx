@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { ProtectedRoute } from "@/lib/auth";
-import type { EvalCase, EvalDataset, FinanceEvalResult } from "@/lib/types";
+import type { EvalCase, EvalDataset, FinanceEvalResult, FinanceSummary } from "@/lib/types";
 import { colors, font, card, btnPrimary, btnGhost, btnDanger, inputBase } from "@/lib/styles";
 
 export default function FinanceEvaluationsPage() {
@@ -19,13 +19,17 @@ function FinanceEvaluationsPageInner() {
 
   // Datasets state
   const [datasets, setDatasets] = useState<EvalDataset[]>([]);
+  const [summary, setSummary] = useState<FinanceSummary | null>(null);
   const [cases, setCases] = useState<EvalCase[]>([]);
   const [selectedDs, setSelectedDs] = useState<number | null>(null);
   const [caseFilter, setCaseFilter] = useState("");
   const [dsLoading, setDsLoading] = useState(false);
 
   const loadEval = () => api.listFinanceEvaluationResults().then((rows: any) => setResults(rows)).catch(() => setResults([]));
-  const loadDatasets = () => { api.listDatasets().then((rows: any) => setDatasets(rows)).catch(() => {}); };
+  const loadDatasets = () => {
+    api.listDatasets().then((rows: any) => setDatasets(rows)).catch(() => {});
+    api.getFinanceSummary().then((row: any) => setSummary(row)).catch(() => setSummary(null));
+  };
 
   useEffect(() => { loadEval(); loadDatasets(); }, []);
 
@@ -105,6 +109,30 @@ function FinanceEvaluationsPageInner() {
           {message}
         </div>
       )}
+
+      <div style={card}>
+        <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>数据源维度</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+          {buildSourceRows(datasets).map((row) => (
+            <div key={row.label} style={{ background: colors.hover, borderRadius: 6, padding: "10px 12px" }}>
+              <div style={{ color: colors.textMuted, fontSize: font.xs }}>{row.label}</div>
+              <div style={{ fontSize: font.lg, fontWeight: 700, marginTop: 4 }}>{row.cases}</div>
+              <div style={{ color: colors.textSecondary, fontSize: font.xs, marginTop: 3 }}>
+                datasets {row.datasets} · frozen {row.frozen}
+              </div>
+            </div>
+          ))}
+        </div>
+        {summary && Object.keys(summary.dataset_failure_counts || {}).length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {Object.entries(summary.dataset_failure_counts).map(([reason, count]) => (
+              <span key={reason} style={{ ...tag, color: colors.warn }}>
+                {reason}: {count}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
 
       {tab === "eval" && (
         <>
@@ -336,3 +364,32 @@ function groupFailures(results: any[]) {
     return acc;
   }, {});
 }
+
+function buildSourceRows(datasets: EvalDataset[]) {
+  const buckets: Record<string, { label: string; datasets: number; cases: number; frozen: number }> = {
+    sec: { label: "SEC 10-K", datasets: 0, cases: 0, frozen: 0 },
+    custom: { label: "自建 10-K", datasets: 0, cases: 0, frozen: 0 },
+    public: { label: "公开 QA Benchmark", datasets: 0, cases: 0, frozen: 0 },
+    financebench: { label: "FinanceBench 补充", datasets: 0, cases: 0, frozen: 0 },
+  };
+  datasets.forEach((ds) => {
+    const key =
+      ds.name === "sec_10k" || ds.source === "sec_edgar" ? "sec" :
+      ds.name === "custom_10k" || ds.source === "custom" ? "custom" :
+      ds.source === "financebench" ? "financebench" :
+      "public";
+    buckets[key].datasets += 1;
+    buckets[key].cases += ds.case_count || 0;
+    if (ds.frozen_at) buckets[key].frozen += 1;
+  });
+  return Object.values(buckets);
+}
+
+const tag: React.CSSProperties = {
+  display: "inline-block",
+  padding: "3px 8px",
+  borderRadius: 6,
+  background: colors.hover,
+  border: `1px solid ${colors.borderLight}`,
+  fontSize: font.xs,
+};

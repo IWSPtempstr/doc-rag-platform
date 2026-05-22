@@ -1,7 +1,7 @@
 import { AuthProvider } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 
-export const metadata = { title: "文档 RAG 平台", description: "Document RAG Platform v3.0" };
+export const metadata = { title: "财报分析工作台", description: "Financial RAG Workbench" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

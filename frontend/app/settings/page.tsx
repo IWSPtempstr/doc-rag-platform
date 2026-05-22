@@ -8,11 +8,13 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<any>({
     provider: "openai",
     chat_provider: "openai",
-    embedding_provider: "ollama",
-    chat_model: "deepseek-v4-flash",
-    embed_model: "nomic-embed-text",
+    embedding_provider: "openai",
+    chat_model: "Pro/zai-org/GLM-5.1",
+    embed_model: "Qwen/Qwen3-VL-Embedding-8B",
     top_k: 5,
     stream: true,
+    vision_provider: "openai",
+    vision_model: "Qwen/Qwen3.6-35B-A3B",
   });
   const [saved, setSaved] = useState(false);
 
@@ -52,8 +54,8 @@ export default function SettingsPage() {
 
         <Field label="Embedding Provider">
           <select value={settings.embedding_provider} onChange={(e) => update("embedding_provider", e.target.value)} style={selectStyle}>
-            <option value="ollama">Ollama</option>
             <option value="openai">OpenAI / Compatible</option>
+            <option value="ollama">Ollama</option>
           </select>
         </Field>
 
@@ -64,7 +66,12 @@ export default function SettingsPage() {
 
         <Field label="Embed Model">
           <input value={settings.embed_model} onChange={(e) => update("embed_model", e.target.value)}
-            style={{ ...inputBase, width: "100%" }} placeholder="nomic-embed-text" />
+            style={{ ...inputBase, width: "100%" }} placeholder="Qwen/Qwen3-VL-Embedding-8B" />
+        </Field>
+
+        <Field label="Vision Model">
+          <input value={settings.vision_model || ""} onChange={(e) => update("vision_model", e.target.value)}
+            style={{ ...inputBase, width: "100%" }} placeholder="Qwen/Qwen3.6-35B-A3B" />
         </Field>
 
         <Field label="Top K">
