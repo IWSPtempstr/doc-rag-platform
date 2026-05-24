@@ -13,5 +13,7 @@ Pillow>=10.0.0
 python-dotenv>=1.0.0
 alembic>=1.13.0
 passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1
 langgraph>=0.2.0
-datasets>=2.0.0
+akshare>=1.16.0
+pandas>=2.0.0,<2.4.0

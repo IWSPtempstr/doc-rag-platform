@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { ProtectedRoute } from "@/lib/auth";
+import { ProtectedRoute, useAuth } from "@/lib/auth";
 import type { ConnectorStatusResponse, ConnectorStatusRow } from "@/lib/types";
 import { colors, font, card, btnGhost } from "@/lib/styles";
 
@@ -11,23 +12,39 @@ export default function FinanceConnectorsPage() {
 }
 
 function FinanceConnectorsInner() {
+  const router = useRouter();
+  const { workspaces, loading } = useAuth();
   const [status, setStatus] = useState<ConnectorStatusResponse | null>(null);
   const [message, setMessage] = useState("");
   const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [syncing, setSyncing] = useState(false);
 
   const load = () => {
-    api.getConnectorStatus()
+    api.getAdminConnectorStatus()
       .then((data: any) => setStatus(data))
       .catch((err: any) => setMessage(`加载失败: ${err.message}`));
   };
 
-  useEffect(() => { load(); }, []);
+  const role = workspaces[0]?.role || "user";
+  const isAdmin = role === "admin" || role === "owner";
+
+  useEffect(() => {
+    if (!loading && !isAdmin) {
+      router.replace("/finance");
+      return;
+    }
+    if (!loading && isAdmin) load();
+  }, [loading, isAdmin, router]);
+
+  if (!loading && !isAdmin) {
+    return null;
+  }
 
   const testConnector = async (name: string) => {
     setTesting((prev) => ({ ...prev, [name]: true }));
     setMessage("");
     try {
-      const result: any = await api.testConnector(name);
+      const result: any = await api.testAdminConnector(name);
       setStatus((prev) => {
         if (!prev) return prev;
         return {
@@ -45,16 +62,36 @@ function FinanceConnectorsInner() {
 
   const connectors = status?.connectors || [];
 
+  const runDailySync = async () => {
+    setSyncing(true);
+    setMessage("");
+    try {
+      const result: any = await api.runAdminDailySync();
+      const failure = result.metrics?.sentiment_failure_reason ? `；情绪降级原因：${result.metrics.sentiment_failure_reason}` : "";
+      setMessage(`日更完成：简报 ${result.metrics?.brief_items ?? 0} 条，情绪 ${result.metrics?.sentiment_upserted ?? 0} 条${failure}`);
+      load();
+    } catch (err: any) {
+      setMessage(`日更失败: ${err.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: font.xxl }}>数据源 / Connector 工作台</h1>
+          <h1 style={{ margin: 0, fontSize: font.xxl }}>A 股数据源管理</h1>
           <p style={{ margin: "6px 0 0", color: colors.textSecondary, fontSize: font.sm }}>
-            管理 SEC、CNINFO、AKShare、公开评测集与 Chroma 索引覆盖。
+            管理 CNINFO、AKShare、TuShare、A 股 MCP 与公告索引覆盖。
           </p>
         </div>
-        <button onClick={load} style={btnGhost}>刷新</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={runDailySync} disabled={syncing} style={{ ...btnGhost, opacity: syncing ? 0.6 : 1 }}>
+            {syncing ? "同步中..." : "立即日更"}
+          </button>
+          <button onClick={load} style={btnGhost}>刷新</button>
+        </div>
       </div>
 
       {message && (

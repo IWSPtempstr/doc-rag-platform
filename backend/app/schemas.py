@@ -218,6 +218,7 @@ class WorkspaceResponse(BaseModel):
     name: str
     slug: str
     created_at: datetime
+    role: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -252,16 +253,10 @@ class CompanyResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class FilingImportRequest(BaseModel):
-    workspace_id: int = 1
-    year: Optional[int] = None
-    accession_number: Optional[str] = None
-
-
 class FilingBindDocumentRequest(BaseModel):
     document_id: int
     fiscal_year: int
-    filing_type: str = "10-K"
+    filing_type: str = "annual_report"
 
 
 class FilingResponse(BaseModel):
@@ -364,6 +359,47 @@ class MarketFactResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WatchlistCreateRequest(BaseModel):
+    ticker: str
+    priority: int = 100
+
+
+class WatchlistResponse(BaseModel):
+    id: int
+    user_id: int
+    workspace_id: int
+    ticker: str
+    priority: int
+    created_at: datetime
+    company: Optional[dict] = None
+
+    model_config = {"from_attributes": True}
+
+
+class SentimentFactResponse(BaseModel):
+    id: int
+    workspace_id: int
+    ticker: Optional[str] = None
+    trade_date: str
+    scope: str
+    score: Optional[float] = None
+    label: Optional[str] = None
+    source: str
+    evidence: Optional[str] = None
+    metadata_json: Optional[dict] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DailyBriefResponse(BaseModel):
+    trade_date: str
+    status: str
+    summary: Optional[str] = None
+    items: list[dict] = []
+    metadata: dict = {}
+
+
 class FinanceAgentQueryRequest(BaseModel):
     workspace_id: int = 1
     company_ticker: str
@@ -395,18 +431,6 @@ class FinanceAgentQueryResponse(BaseModel):
     agent_run_id: int
     steps: list[dict] = []
     verification: dict = {}
-
-
-class EvalDatasetBuildRequest(BaseModel):
-    tickers: list[str] = Field(default_factory=lambda: ["AAPL", "MSFT", "AMZN", "GOOGL", "NVDA", "META", "JPM", "XOM", "JNJ", "WMT"])
-    latest_years: int = 3
-
-
-class EvalDatasetImportRequest(BaseModel):
-    source: str = "huggingface"
-    dataset_path: str = "PatronusAI/financebench"
-    subset: str = "train"
-    limit: Optional[int] = 50
 
 
 class EvalDatasetResponse(BaseModel):
@@ -461,6 +485,18 @@ class FinanceEvaluationRunRequest(BaseModel):
     workspace_id: int = 1
     dataset_source: str = "custom_10k"
     strategy: str = "finance_agent"
+
+
+class FinanceEvalJsonlImportRequest(BaseModel):
+    dataset_name: str = "finance_agent_offline"
+    file_path: str
+
+
+class FinanceEvalJsonlExportResponse(BaseModel):
+    dataset_id: int
+    dataset_name: str
+    file_path: str
+    case_count: int
 
 
 class FinanceEvaluationResultResponse(BaseModel):

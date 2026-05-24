@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { ProtectedRoute } from "@/lib/auth";
-import type { Company, ConnectorStatusResponse, FinanceEvalResult, FinanceSummary } from "@/lib/types";
+import type { Company, DailyBrief, SentimentFact, WatchlistItem } from "@/lib/types";
 import { colors, font, card, btnPrimary, inputBase, btnGhost } from "@/lib/styles";
+import { inferAshareMarket, isAshareLikeTicker, normalizeAshareTicker } from "@/lib/ashare";
 
-type FinanceTab = "overview" | "ingest" | "rag" | "companies";
+type FinanceTab = "brief" | "watchlist" | "ingest" | "analysis" | "companies";
 
 export default function FinanceHomePage() {
   return <ProtectedRoute><FinanceHomePageInner /></ProtectedRoute>;
@@ -15,87 +16,72 @@ export default function FinanceHomePage() {
 
 function FinanceHomePageInner() {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<FinanceTab>("brief");
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [evals, setEvals] = useState<FinanceEvalResult[]>([]);
-  const [summary, setSummary] = useState<FinanceSummary | null>(null);
-  const [connectors, setConnectors] = useState<ConnectorStatusResponse | null>(null);
-  const [activeTab, setActiveTab] = useState<FinanceTab>("overview");
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [brief, setBrief] = useState<DailyBrief | null>(null);
+  const [sentiment, setSentiment] = useState<SentimentFact[]>([]);
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [ashareYear, setAshareYear] = useState(String(new Date().getFullYear() - 1));
+  const [priority, setPriority] = useState("100");
   const [message, setMessage] = useState("");
   const [announcements, setAnnouncements] = useState<any[]>([]);
-  const [ragQuestion, setRagQuestion] = useState("");
-  const [ragResult, setRagResult] = useState<any>(null);
-  const [ragLoading, setRagLoading] = useState(false);
-  const [ragError, setRagError] = useState("");
+  const [question, setQuestion] = useState("");
+  const [agentResult, setAgentResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = () => {
-    api.listCompanies().then((rows: any) => setCompanies(rows)).catch(console.error);
-    api.listFinanceEvaluationResults().then((rows: any) => setEvals(rows)).catch(() => setEvals([]));
-    api.getFinanceSummary().then((row: any) => setSummary(row)).catch(() => setSummary(null));
-    api.getConnectorStatus().then((row: any) => setConnectors(row)).catch(() => setConnectors(null));
+    api.listCompanies().then((rows: any) => setCompanies(rows)).catch(() => setCompanies([]));
+    api.getWatchlist().then((rows: any) => setWatchlist(rows)).catch(() => setWatchlist([]));
+    api.getDailyBrief().then((row: any) => setBrief(row)).catch(() => setBrief(null));
+    api.getSentimentFacts({ limit: 30 }).then((rows: any) => setSentiment(rows)).catch(() => setSentiment([]));
   };
 
   useEffect(() => { load(); }, []);
 
-  const createCompany = async () => {
-    if (!ticker.trim()) return;
+  const addWatch = async () => {
+    const symbol = normalizeAshareTicker(ticker);
+    if (!isAshareLikeTicker(symbol)) {
+      setMessage("请输入 6 位 A 股代码");
+      return;
+    }
     try {
-      await api.createCompany({ ticker, name: companyName || undefined, exchange: inferMarket(ticker) });
+      await api.addWatchlist({ ticker: symbol, priority: Number(priority) || 100 });
+      setMessage(`${symbol} 已加入关注`);
+      setTicker("");
+      load();
+    } catch (err: any) {
+      setMessage(`关注失败: ${err.message}`);
+    }
+  };
+
+  const removeWatch = async (symbol: string) => {
+    await api.removeWatchlist(symbol);
+    setMessage(`${symbol} 已取消关注`);
+    load();
+  };
+
+  const createAshareCompany = async () => {
+    const symbol = normalizeAshareTicker(ticker);
+    if (!isAshareLikeTicker(symbol)) {
+      setMessage("请输入 6 位 A 股代码");
+      return;
+    }
+    try {
+      await api.createCompany({ ticker: symbol, name: companyName || undefined, exchange: inferAshareMarket(symbol), industry: "A-share" });
+      setMessage(`${symbol} 已创建`);
       setTicker("");
       setCompanyName("");
-      setMessage("公司已创建");
-      setActiveTab("companies");
       load();
     } catch (err: any) {
       setMessage(`创建失败: ${err.message}`);
     }
   };
 
-  const importLatest = async (symbol: string) => {
-    try {
-      const filing: any = await api.importFiling(symbol, {});
-      setMessage(`${symbol} ${filing.fiscal_year} 10-K 已加入导入队列`);
-      load();
-    } catch (err: any) {
-      setMessage(`导入失败: ${err.message}`);
-    }
-  };
-
-  const importAshareAnnual = async (symbol: string) => {
-    try {
-      const filing: any = await api.importAshareFiling(symbol, { fiscal_year: Number(ashareYear) });
-      setMessage(`${symbol} ${filing.fiscal_year} A 股年报已加入导入队列`);
-      load();
-    } catch (err: any) {
-      setMessage(`A 股导入失败: ${err.message}`);
-    }
-  };
-
-  const addAndImportAshare = async () => {
-    const symbol = ticker.trim();
-    if (!isAshare(symbol)) {
-      setMessage("请输入 6 位 A 股代码");
-      return;
-    }
-    try {
-      await api.createCompany({ ticker: symbol, name: companyName || undefined, exchange: inferMarket(symbol), industry: "A-share" });
-      const filing: any = await api.importAshareFiling(symbol, { fiscal_year: Number(ashareYear) });
-      setMessage(`${symbol} ${filing.fiscal_year} A 股年报已加入导入队列`);
-      setTicker("");
-      setCompanyName("");
-      setAnnouncements([]);
-      setActiveTab("companies");
-      load();
-    } catch (err: any) {
-      setMessage(`A 股导入失败: ${err.message}`);
-    }
-  };
-
-  const searchAshareAnnual = async () => {
-    const symbol = ticker.trim();
-    if (!isAshare(symbol)) {
+  const searchAnnual = async () => {
+    const symbol = normalizeAshareTicker(ticker);
+    if (!isAshareLikeTicker(symbol)) {
       setMessage("请输入 6 位 A 股代码");
       return;
     }
@@ -111,54 +97,97 @@ function FinanceHomePageInner() {
     }
   };
 
-  const syncAshareMarket = async (symbol: string) => {
+  const importAnnual = async (symbol?: string) => {
+    const target = normalizeAshareTicker(symbol || ticker);
+    if (!isAshareLikeTicker(target)) {
+      setMessage("请输入 6 位 A 股代码");
+      return;
+    }
+    try {
+      await api.createCompany({ ticker: target, name: companyName || undefined, exchange: inferAshareMarket(target), industry: "A-share" });
+      const filing: any = await api.importAshareFiling(target, { fiscal_year: Number(ashareYear) });
+      setMessage(`${target} ${filing.fiscal_year} 年报已加入导入队列`);
+      setTicker("");
+      setCompanyName("");
+      setAnnouncements([]);
+      load();
+    } catch (err: any) {
+      setMessage(`年报导入失败: ${err.message}`);
+    }
+  };
+
+  const syncMarket = async (symbol: string) => {
     try {
       const result: any = await api.syncAshareMarket(symbol, {});
-      setMessage(`${symbol} 行情事实已同步 ${result.upserted} 条`);
+      setMessage(result.fallback
+        ? `${symbol} 暂未取得价格行情，已写入市场热度 ${result.upserted} 条`
+        : `${symbol} 行情事实已同步 ${result.upserted} 条`);
+      load();
     } catch (err: any) {
       setMessage(`行情同步失败: ${err.message}`);
     }
   };
 
-  const deleteCompany = async (symbol: string) => {
-    if (!window.confirm(`确认删除 ${symbol} 及其 filings、facts、索引文档？`)) return;
+  const runAnalysis = async () => {
+    if (!question.trim()) return;
+    const symbol = watchlist[0]?.ticker || companies.find((item) => isAshareLikeTicker(item.ticker))?.ticker;
+    if (!symbol) {
+      setMessage("请先添加或关注一家 A 股公司");
+      return;
+    }
+    setLoading(true);
+    setAgentResult(null);
     try {
-      const result: any = await api.deleteCompany(symbol);
-      setMessage(`${symbol} 已删除，filings ${result.filings_deleted || 0}，documents ${result.documents_deleted || 0}`);
-      load();
+      const result: any = await api.queryFinanceAgent({ company_ticker: symbol, question, mode: "full" });
+      setAgentResult(result);
     } catch (err: any) {
-      setMessage(`删除失败: ${err.message}`);
+      setMessage(`分析失败: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const askRag = async () => {
-    if (!ragQuestion.trim()) return;
-    setRagLoading(true);
-    setRagError("");
-    setRagResult(null);
-    try {
-      const result: any = await api.query(ragQuestion, 5);
-      setRagResult(result);
-    } catch (err: any) {
-      setRagError(err.message);
-    } finally {
-      setRagLoading(false);
+  const openBriefCompany = async (item: Record<string, any>) => {
+    const symbol = normalizeAshareTicker(item.ticker || item.symbol || item["代码"]);
+    if (!isAshareLikeTicker(symbol)) {
+      setMessage("该简报条目缺少有效 A 股代码");
+      return;
     }
+    const name = item.name || item["名称"] || symbol;
+    try {
+      await api.createCompany({
+        ticker: symbol,
+        name,
+        exchange: inferAshareMarket(symbol),
+        industry: "A-share",
+      });
+    } catch (err: any) {
+      const text = String(err?.message || "");
+      if (!text.includes("exists") && !text.includes("已存在")) {
+        setMessage(`创建公司失败: ${text || "未知错误"}`);
+        return;
+      }
+    }
+    const params = new URLSearchParams();
+    params.set("from", "brief");
+    if (brief?.trade_date) params.set("date", brief.trade_date);
+    if (item.section) params.set("section", String(item.section));
+    if (item.rank) params.set("rank", String(item.rank));
+    router.push(`/finance/companies/${symbol}?${params.toString()}`);
   };
+
+  const sentimentSummary = summarizeMarketSentiment(sentiment);
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: font.xxl }}>财报分析工作台</h1>
+          <h1 style={{ margin: 0, fontSize: font.xxl }}>A 股公告与情绪分析工作台</h1>
           <p style={{ margin: "6px 0 0", color: colors.textSecondary, fontSize: font.sm }}>
-            SEC 10-K / A 股公告导入、证据型 RAG、多步 Agent 分析与评估
+            每日站内简报、关注公司、异常公告、行情热度与市场情绪研究辅助。
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={btnGhost} onClick={() => router.push("/finance/agent")}>Agent 分析</button>
-          <button style={btnGhost} onClick={() => router.push("/finance/evaluations")}>评估</button>
-        </div>
+        <button style={btnGhost} onClick={() => router.push("/finance/agent")}>打开分析页</button>
       </div>
 
       {message && (
@@ -168,70 +197,135 @@ function FinanceHomePageInner() {
       )}
 
       <div style={tabsWrap}>
-        <button style={tabButton(activeTab === "overview")} onClick={() => setActiveTab("overview")}>总览</button>
-        <button style={tabButton(activeTab === "ingest")} onClick={() => setActiveTab("ingest")}>数据入口</button>
-        <button style={tabButton(activeTab === "rag")} onClick={() => setActiveTab("rag")}>RAG 问答</button>
+        <button style={tabButton(activeTab === "brief")} onClick={() => setActiveTab("brief")}>每日简报</button>
+        <button style={tabButton(activeTab === "watchlist")} onClick={() => setActiveTab("watchlist")}>关注公司</button>
+        <button style={tabButton(activeTab === "ingest")} onClick={() => setActiveTab("ingest")}>公告入口</button>
+        <button style={tabButton(activeTab === "analysis")} onClick={() => setActiveTab("analysis")}>个性化分析</button>
         <button style={tabButton(activeTab === "companies")} onClick={() => setActiveTab("companies")}>公司资产</button>
       </div>
 
-      {activeTab === "overview" && (
+      {activeTab === "brief" && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-            <Metric title="公司数" value={String(summary?.company_count ?? companies.length)} />
-            <Metric title="Filings" value={String(summary?.filing_count ?? "-")} />
-            <Metric title="公开数据集" value={String(summary?.dataset_count ?? "-")} />
-            <Metric title="可评估 Cases" value={String(summary?.case_count ?? "-")} />
-            <Metric title="最近评估" value={evals[0]?.strategy || "-"} />
-            <Metric title="检索命中率" value={formatMetric(summary?.latest_eval?.retrieval_hit_rate ?? evals[0]?.metrics?.retrieval_hit_rate)} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
+            <Metric title="关注公司" value={String(watchlist.length)} />
+            <Metric title="简报条目" value={String(brief?.items?.length ?? 0)} />
+            <Metric title="热点补充" value={String(brief?.metadata?.hot_count ?? 0)} />
+            <Metric title="情绪事实" value={String(sentiment.length)} />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 12 }}>
-            <Metric title="连接器" value={String(connectors?.connectors?.length ?? 0)} />
-            <Metric title="可用数据源" value={String((connectors?.connectors || []).filter((c) => c.status === "available" || c.status === "configured" || c.status === "success").length)} />
-            <Metric title="日更任务" value={String(connectors?.daily_jobs?.length ?? 0)} />
-            <div style={{ ...card, marginBottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+          <div style={card}>
+            <h2 style={{ margin: "0 0 8px", fontSize: font.lg }}>今日简报</h2>
+            <div style={{ color: colors.textSecondary, fontSize: font.sm, marginBottom: 12 }}>
+              {brief?.summary || "暂无简报。添加关注公司或等待日更任务生成。"}
+            </div>
+            {(brief?.items || []).length === 0 ? (
+              <div style={{ color: colors.textMuted, padding: 24, textAlign: "center" }}>暂无条目</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {brief!.items.map((item, idx) => {
+                  const normalized = normalizeAshareTicker(item.ticker || item.symbol || item["代码"]);
+                  return (
+                  <button
+                    key={`${item.ticker}-${idx}`}
+                    onClick={() => openBriefCompany(item)}
+                    style={briefItemButton}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                      <strong>{normalized} · {item.name}</strong>
+                      <span style={{ color: item.section === "watchlist" ? colors.accent : colors.textMuted, fontSize: font.xs }}>
+                        {item.section === "watchlist" ? "关注公司" : `热度 #${item.rank || "-"}`}
+                      </span>
+                    </div>
+                    <div style={{ marginTop: 6, color: colors.textSecondary, fontSize: font.xs }}>
+                      {briefReason(item)}
+                    </div>
+                    <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {(item.coverage_tags || inferBriefCoverageTags(item)).map((tagText: string) => (
+                        <span key={tagText} style={briefCoverageTag(tagText)}>{tagText}</span>
+                      ))}
+                    </div>
+                  </button>
+                )})}
+              </div>
+            )}
+          </div>
+
+          <div style={card}>
+            <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>市场情绪</h2>
+            {sentiment.length === 0 ? (
+              <div style={{ color: colors.textMuted, fontSize: font.sm }}>暂无情绪事实，可由管理者执行日更任务同步。</div>
+            ) : (
               <div>
-                <div style={{ color: colors.textMuted, fontSize: font.xs, marginBottom: 6 }}>数据源工作台</div>
-                <div style={{ fontSize: font.md, fontWeight: 700 }}>SEC / CNINFO / AKShare / Chroma</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                  <Metric title="最新交易日" value={sentimentSummary.latest?.trade_date || "-"} />
+                  <Metric title="情绪分数" value={formatNumber(sentimentSummary.latest?.score)} />
+                  <Metric title="情绪标签" value={sentimentSummary.latest?.label || "unknown"} />
+                  <Metric title="较上一条" value={sentimentSummary.delta === null ? "-" : `${sentimentSummary.delta > 0 ? "+" : ""}${formatNumber(sentimentSummary.delta)}`} />
+                  <Metric title="30 日均值" value={formatNumber(sentimentSummary.avg)} />
+                  <Metric title="最高 / 最低" value={`${formatNumber(sentimentSummary.max)} / ${formatNumber(sentimentSummary.min)}`} />
+                </div>
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", color: colors.textSecondary, fontSize: font.xs }}>
+                  <span style={tag}>来源：{sentimentSummary.latest?.source || "-"}</span>
+                  <span style={tag}>更新时间：{sentimentSummary.latest?.created_at ? new Date(sentimentSummary.latest.created_at).toLocaleString() : "-"}</span>
+                </div>
+                <div style={{ marginTop: 14, display: "grid", gap: 6 }}>
+                  {sentiment.slice(0, 30).map((item) => (
+                    <div key={item.id} style={sentimentRow}>
+                      <span style={{ width: 90 }}>{item.trade_date}</span>
+                      <span style={{ width: 90, color: sentimentColor(item.label) }}>{item.label || "unknown"}</span>
+                      <div style={{ flex: 1, height: 8, background: colors.borderLight, borderRadius: 999, overflow: "hidden" }}>
+                        <div style={{ width: `${Math.max(0, Math.min(100, Number(item.score || 0)))}%`, height: "100%", background: sentimentColor(item.label) }} />
+                      </div>
+                      <span style={{ width: 54, textAlign: "right" }}>{formatNumber(item.score)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <button style={{ ...btnGhost, marginTop: 12, alignSelf: "flex-start" }} onClick={() => router.push("/finance/connectors")}>
-                查看连接器
-              </button>
-            </div>
+            )}
           </div>
-
-          <div style={{ ...card, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-            <div>
-              <h2 style={{ margin: "0 0 6px", fontSize: font.lg }}>常用操作</h2>
-              <div style={{ color: colors.textSecondary, fontSize: font.sm }}>
-                导入公司、问答、查看资产分别在上方 tab 中处理。
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-              <button style={btnGhost} onClick={() => setActiveTab("ingest")}>导入数据</button>
-              <button style={btnGhost} onClick={() => setActiveTab("rag")}>RAG 问答</button>
-              <button style={btnGhost} onClick={() => setActiveTab("companies")}>公司资产</button>
-            </div>
-          </div>
-
-          {summary && Object.keys(summary.dataset_failure_counts || {}).length > 0 && (
-            <FailurePanel summary={summary} />
-          )}
         </>
+      )}
+
+      {activeTab === "watchlist" && (
+        <div style={card}>
+          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>关注公司</h2>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px auto", gap: 10, marginBottom: 14 }}>
+            <input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="600519" style={inputBase} />
+            <input value={priority} onChange={(e) => setPriority(e.target.value)} placeholder="优先级" style={inputBase} />
+            <button onClick={addWatch} style={btnPrimary}>关注</button>
+          </div>
+          {watchlist.length === 0 ? (
+            <div style={{ color: colors.textMuted, padding: 24, textAlign: "center" }}>未设置关注公司，简报将展示当日热度企业。</div>
+          ) : (
+            <table style={table}>
+              <thead><tr><th style={th}>代码</th><th style={th}>公司</th><th style={th}>优先级</th><th style={th}>操作</th></tr></thead>
+              <tbody>
+                {watchlist.map((item) => (
+                  <tr key={item.id} style={{ borderBottom: `1px solid ${colors.borderLight}` }}>
+                    <td style={td}>{item.ticker}</td>
+                    <td style={td}>{item.company?.name || item.ticker}</td>
+                    <td style={td}>{item.priority}</td>
+                    <td style={td}><button style={btnGhost} onClick={() => removeWatch(item.ticker)}>取消关注</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
 
       {activeTab === "ingest" && (
         <div style={card}>
-          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>数据入口</h2>
+          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>公告与年报入口</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-            <input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="AAPL 或 600519" style={inputBase} />
-            <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="公司名，可留空自动解析 SEC" style={inputBase} />
-            <input value={ashareYear} onChange={(e) => setAshareYear(e.target.value)} placeholder="A股年报年份" style={inputBase} />
-            <button onClick={createCompany} style={btnPrimary}>添加</button>
+            <input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="600519" style={inputBase} />
+            <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="公司名，可留空" style={inputBase} />
+            <input value={ashareYear} onChange={(e) => setAshareYear(e.target.value)} placeholder="年报年份" style={inputBase} />
+            <button onClick={createAshareCompany} style={btnPrimary}>添加公司</button>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button onClick={searchAshareAnnual} style={btnGhost}>搜索A股年报</button>
-            <button onClick={addAndImportAshare} style={btnGhost}>添加并导入A股年报</button>
+            <button onClick={searchAnnual} style={btnGhost}>搜索年报公告</button>
+            <button onClick={() => importAnnual()} style={btnGhost}>添加并导入年报</button>
           </div>
           {announcements.length > 0 && (
             <div style={{ marginTop: 12, borderTop: `1px solid ${colors.borderLight}`, paddingTop: 10 }}>
@@ -246,46 +340,24 @@ function FinanceHomePageInner() {
         </div>
       )}
 
-      {activeTab === "rag" && (
+      {activeTab === "analysis" && (
         <div style={card}>
-          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>文档 RAG 问答</h2>
+          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>个性化研究分析</h2>
           <div style={{ display: "flex", gap: 10 }}>
             <input
-              value={ragQuestion}
-              onChange={(e) => setRagQuestion(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && askRag()}
-              placeholder="输入财报或公告相关问题"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && runAnalysis()}
+              placeholder="例如：结合公告、财务事实和情绪变化解释关注公司的今日变化"
               style={{ ...inputBase, flex: 1 }}
             />
-            <button onClick={askRag} disabled={ragLoading} style={{ ...btnPrimary, opacity: ragLoading ? 0.6 : 1 }}>
-              {ragLoading ? "查询中..." : "提问"}
+            <button onClick={runAnalysis} disabled={loading} style={{ ...btnPrimary, opacity: loading ? 0.6 : 1 }}>
+              {loading ? "分析中..." : "分析"}
             </button>
           </div>
-          {ragError && (
-            <div style={{ color: colors.danger, fontSize: font.sm, marginTop: 10 }}>{ragError}</div>
-          )}
-          {ragResult && (
+          {agentResult && (
             <div style={{ marginTop: 14, borderTop: `1px solid ${colors.borderLight}`, paddingTop: 14 }}>
-              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: font.sm }}>
-                {ragResult.answer}
-              </div>
-              {ragResult.citations?.length > 0 && (
-                <details style={{ marginTop: 12 }}>
-                  <summary style={{ cursor: "pointer", color: colors.textSecondary, fontSize: font.sm }}>
-                    引用来源 ({ragResult.citations.length})
-                  </summary>
-                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                    {ragResult.citations.map((citation: any, idx: number) => (
-                      <div key={`${citation.chunk_id || idx}`} style={{ background: colors.hover, borderRadius: 6, padding: 10, fontSize: font.xs }}>
-                        <div style={{ color: colors.textSecondary, marginBottom: 4 }}>
-                          {citation.filename} · score {citation.score?.toFixed?.(3) || "-"}
-                        </div>
-                        <div style={{ color: colors.text }}>{citation.content?.slice(0, 220)}</div>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, fontSize: font.sm }}>{agentResult.answer}</div>
             </div>
           )}
         </div>
@@ -293,47 +365,25 @@ function FinanceHomePageInner() {
 
       {activeTab === "companies" && (
         <div style={card}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <h2 style={{ margin: 0, fontSize: font.lg }}>公司资产</h2>
-            <button style={btnGhost} onClick={() => setActiveTab("ingest")}>添加公司</button>
-          </div>
+          <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>公司资产</h2>
           {companies.length === 0 ? (
-            <div style={{ color: colors.textMuted, fontSize: font.sm, padding: 24, textAlign: "center" }}>
-              还没有公司。添加 ticker 后可导入最新 10-K。
-            </div>
+            <div style={{ color: colors.textMuted, fontSize: font.sm, padding: 24, textAlign: "center" }}>还没有 A 股公司。</div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={table}>
               <thead>
-                <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
-                  <th style={th}>Ticker</th>
-                  <th style={th}>公司</th>
-                  <th style={th}>市场</th>
-                  <th style={th}>CIK</th>
-                  <th style={th}>Filings</th>
-                  <th style={th}>操作</th>
-                </tr>
+                <tr><th style={th}>代码</th><th style={th}>公司</th><th style={th}>市场</th><th style={th}>公告/年报</th><th style={th}>操作</th></tr>
               </thead>
               <tbody>
-                {companies.map((company) => (
+                {companies.filter((company) => isAshareLikeTicker(company.ticker)).map((company) => (
                   <tr key={company.id} style={{ borderBottom: `1px solid ${colors.borderLight}` }}>
                     <td style={td}><strong>{company.ticker}</strong></td>
-                    <td style={{ ...td, cursor: "pointer", color: colors.accent }} onClick={() => router.push(`/finance/companies/${company.ticker}`)}>
-                      {company.name}
-                    </td>
-                    <td style={td}>{company.exchange || (isAshare(company.ticker) ? "CN" : "US")}</td>
-                    <td style={td}>{company.cik || "-"}</td>
+                    <td style={{ ...td, cursor: "pointer", color: colors.accent }} onClick={() => router.push(`/finance/companies/${company.ticker}`)}>{company.name}</td>
+                    <td style={td}>{company.exchange || inferAshareMarket(company.ticker)}</td>
                     <td style={td}>{company.filing_count}</td>
                     <td style={td}>
-                      {isAshare(company.ticker) ? (
-                        <>
-                          <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importAshareAnnual(company.ticker)}>导入A股年报</button>
-                          <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => syncAshareMarket(company.ticker)}>同步行情</button>
-                        </>
-                      ) : (
-                        <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importLatest(company.ticker)}>导入最新 10-K</button>
-                      )}
+                      <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => importAnnual(company.ticker)}>导入年报</button>
+                      <button style={{ ...btnGhost, marginRight: 8 }} onClick={() => syncMarket(company.ticker)}>同步行情</button>
                       <button style={btnGhost} onClick={() => router.push(`/finance/companies/${company.ticker}`)}>详情</button>
-                      <button style={{ ...btnGhost, marginLeft: 8, color: colors.danger }} onClick={() => deleteCompany(company.ticker)}>删除</button>
                     </td>
                   </tr>
                 ))}
@@ -355,37 +405,62 @@ function Metric({ title, value }: { title: string; value: string }) {
   );
 }
 
-function formatMetric(value: any) {
-  return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "-";
+function briefReason(item: Record<string, any>) {
+  const tags = item.coverage_tags || inferBriefCoverageTags(item);
+  if (item.section === "watchlist") {
+    return tags.includes("缺少基本面验证")
+      ? "你已关注这家公司，但公告/财务覆盖不足，优先补全年报和财务事实。"
+      : "你已关注这家公司，优先查看它今天的公告、财务和热度变化。";
+  }
+  const heat = item.heat_score ?? item["热度"] ?? item.value;
+  const rank = item.rank || item["排名"];
+  if (rank && heat !== undefined && heat !== null) {
+    return `今日热度排名 #${rank}，热度值 ${formatNumber(Number(heat))}，先作为市场关注度入口，需结合公告和财务事实验证。`;
+  }
+  if (rank) return `今日热度排名 #${rank}，适合继续查看公告和财务覆盖情况。`;
+  return "可查看公告变化、财务事实、行情热度和市场情绪，不提供买卖建议。";
 }
 
-function FailurePanel({ summary }: { summary: FinanceSummary }) {
-  return (
-    <div style={card}>
-      <h2 style={{ margin: "0 0 12px", fontSize: font.lg }}>阻塞原因</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-        {Object.entries(summary.dataset_failure_counts).map(([reason, count]) => (
-          <div key={reason} style={{ background: colors.hover, borderRadius: 6, padding: "8px 10px" }}>
-            <div style={{ color: colors.textMuted, fontSize: font.xs, wordBreak: "break-word" }}>{reason}</div>
-            <div style={{ fontWeight: 700 }}>{count}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function inferBriefCoverageTags(item: Record<string, any>) {
+  const tags: string[] = [];
+  if (item.has_announcements || item.announcement_count > 0) tags.push("已有关联公告");
+  if (item.has_financial_facts || item.financial_fact_count > 0) tags.push("已有财务事实");
+  if (item.heat_score !== undefined && item.heat_score !== null) tags.push("仅热度信号");
+  if (!tags.includes("已有财务事实")) tags.push("缺少基本面验证");
+  return tags.length ? tags : ["数据覆盖不足"];
 }
 
-function isAshare(ticker: string) {
-  return /^\d{6}$/.test(ticker);
-}
-
-function inferMarket(ticker: string) {
-  if (!isAshare(ticker)) return undefined;
-  return ticker.startsWith("6") || ticker.startsWith("5") || ticker.startsWith("9") ? "SSE" : "SZSE";
-}
-
+const table: React.CSSProperties = { width: "100%", borderCollapse: "collapse" };
 const th: React.CSSProperties = { textAlign: "left", padding: "10px", fontSize: font.xs, color: colors.textMuted };
 const td: React.CSSProperties = { padding: "10px", fontSize: font.sm };
+const tag: React.CSSProperties = {
+  display: "inline-block",
+  padding: "4px 8px",
+  borderRadius: 6,
+  background: colors.hover,
+  border: `1px solid ${colors.borderLight}`,
+  fontSize: font.xs,
+};
+
+const briefItemButton: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  background: colors.surface,
+  border: `1px solid ${colors.borderLight}`,
+  borderRadius: 8,
+  padding: 12,
+  cursor: "pointer",
+  color: colors.text,
+};
+
+const sentimentRow: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  fontSize: font.xs,
+  color: colors.textSecondary,
+};
 const tabsWrap: React.CSSProperties = {
   display: "flex",
   gap: 8,
@@ -404,4 +479,43 @@ function tabButton(active: boolean): React.CSSProperties {
     fontSize: font.sm,
     padding: "7px 16px",
   };
+}
+
+function briefCoverageTag(value: string): React.CSSProperties {
+  const warning = value.includes("缺少") || value.includes("仅热度") || value.includes("未同步");
+  return {
+    ...tag,
+    background: warning ? "#fffbeb" : colors.hover,
+    borderColor: warning ? colors.warn : colors.borderLight,
+    color: warning ? "#92400e" : colors.textSecondary,
+  };
+}
+
+function summarizeMarketSentiment(rows: SentimentFact[]) {
+  const scored = rows.filter((item) => item.score !== null && item.score !== undefined);
+  const latest = rows[0] || null;
+  const previous = rows[1] || null;
+  const values = scored.map((item) => Number(item.score));
+  const avg = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  return {
+    latest,
+    delta: latest?.score !== null && latest?.score !== undefined && previous?.score !== null && previous?.score !== undefined
+      ? Number(latest.score) - Number(previous.score)
+      : null,
+    avg,
+    max: values.length ? Math.max(...values) : null,
+    min: values.length ? Math.min(...values) : null,
+  };
+}
+
+function formatNumber(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return Number(value).toFixed(2);
+}
+
+function sentimentColor(label: string | null | undefined) {
+  if (label === "positive") return colors.success;
+  if (label === "negative") return colors.danger;
+  if (label === "neutral") return colors.warn;
+  return colors.textMuted;
 }

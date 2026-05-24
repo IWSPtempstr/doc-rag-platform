@@ -10,8 +10,9 @@ from typing import Any, TypedDict
 from sqlalchemy.orm import Session
 
 from app.config import config
-from app.models import AgentRunModel, AgentStepModel, CompanyModel, FilingModel, FinancialFactModel, MarketFactModel, SettingsModel
+from app.models import AgentRunModel, AgentStepModel, CompanyModel, FilingModel, FinancialFactModel, MarketFactModel, SentimentFactModel, SettingsModel
 from app.services.embedding_provider import embed_single
+from app.services.finance_research_summary import build_company_research_summary
 from app.services.vector_store import query as vector_query
 
 
@@ -24,6 +25,7 @@ class FinanceAgentState(TypedDict, total=False):
     citations: list[dict]
     facts: list[dict]
     calculations: list[dict]
+    research_summary: dict
     answer: str
     verification: dict
     needs_retrieval_retry: bool
@@ -61,13 +63,15 @@ def run_finance_agent(
         )
     else:
         filing = db.query(FilingModel).filter(FilingModel.id == filing_id).first()
-    if not filing:
-        raise ValueError("No filing available for this company")
+    if filing_id is not None and not filing:
+        raise ValueError("Filing not found for this company")
+
+    research_summary = build_company_research_summary(db, workspace_id, company, user_id)
 
     run = AgentRunModel(
         workspace_id=workspace_id,
         company_id=company.id,
-        filing_id=filing.id,
+        filing_id=filing.id if filing else None,
         user_id=user_id,
         question=question,
         mode=mode,
@@ -80,9 +84,10 @@ def run_finance_agent(
     state: FinanceAgentState = {
         "workspace_id": workspace_id,
         "company_ticker": company.ticker,
-        "filing_id": filing.id,
+        "filing_id": filing.id if filing else None,
         "question": question,
         "mode": mode,
+        "research_summary": research_summary,
         "tool_groups": classify_finance_tool_groups(question),
         "supervisor_phase": "retrieval",
         "retrieval_count": 0,
@@ -98,12 +103,14 @@ def run_finance_agent(
         run.verification = state.get("verification", {})
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
+        _safe_write_finance_trace(db, run.id)
     except Exception as exc:
         run.status = "failed"
         run.answer = f"分析失败: {exc}"
         run.verification = {"passed": False, "errors": [str(exc)]}
         run.completed_at = datetime.now(timezone.utc)
         db.commit()
+        _safe_write_finance_trace(db, run.id)
         raise
 
     steps = (
@@ -203,7 +210,18 @@ def _recorded(db: Session, run_id: int, name: str, fn, state: FinanceAgentState)
         step_order=step_order,
         node_name=name,
         status="running",
-        input_json={"question": state.get("question"), "filing_id": state.get("filing_id")},
+        input_json={
+            "question": state.get("question"),
+            "filing_id": state.get("filing_id"),
+            "tool_groups": state.get("tool_groups", []),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "estimated_tokens": False,
+            "provider": "deterministic",
+            "model": f"finance_mas:{name}",
+            "cache_hit": False,
+        },
     )
     db.add(step)
     db.commit()
@@ -231,7 +249,7 @@ def _supervisor_router(state: FinanceAgentState) -> str:
     if state.get("verification") is not None:
         return "done"
     groups = set(state.get("tool_groups", []))
-    needs_document_retrieval = bool(groups & {"filing_retrieval", "announcement_search"})
+    needs_document_retrieval = bool(groups & {"filing_retrieval", "announcement_search"}) and bool(state.get("filing_id"))
     if needs_document_retrieval and not state.get("citations") and state.get("retrieval_count", 0) < _MAX_RETRIEVAL_ATTEMPTS:
         return "retrieval"
     if not state.get("facts_done"):
@@ -279,6 +297,9 @@ def classify_finance_tool_groups(question: str) -> list[str]:
         groups.add("structured_facts")
     if any(term in q for term in ("股价", "收盘", "开盘", "最高", "最低", "成交量", "市值", "行情", "price", "close", "open", "volume", "market cap")):
         groups.add("market_facts")
+    if any(term in q for term in ("情绪", "sentiment", "热度", "人气", "关注")):
+        groups.add("market_facts")
+        groups.add("market_sentiment")
     if any(term in q for term in ("评估", "benchmark", "dataset", "case", "命中率", "evidence_recall")):
         groups.add("evaluation")
     if not groups:
@@ -298,7 +319,7 @@ _METRIC_ALIAS = {
 # Reverse: canonical → preferred alias
 _CANONICAL_TO_ALIAS = {v: k for k, v in _METRIC_ALIAS.items()}
 
-# Metrics NOT directly disclosed in 10-K — agent should decline
+# Metrics not directly disclosed in standard annual reports; the agent should decline.
 _NON_DISCLOSED_METRICS = {"ebitda", "freecashflow", "free cash flow", "free_cash_flow", "fcf"}
 _MAX_RETRIEVAL_ATTEMPTS = 2
 
@@ -348,6 +369,31 @@ def _fact_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
                     "confidence": row.confidence or 1.0,
                     "evidence": f"{row.ticker} {row.trade_date} {row.label}={row.value}",
                 })
+
+    if "market_sentiment" in groups:
+        sentiment_rows = (
+            db.query(SentimentFactModel)
+            .filter(
+                SentimentFactModel.workspace_id == state["workspace_id"],
+                SentimentFactModel.scope == "market",
+            )
+            .order_by(SentimentFactModel.trade_date.desc(), SentimentFactModel.created_at.desc())
+            .limit(2)
+            .all()
+        )
+        for row in sentiment_rows:
+            facts.append({
+                "metric": "market_sentiment",
+                "canonical_metric": "market_sentiment",
+                "label": "市场情绪",
+                "value": row.score,
+                "unit": "score",
+                "period": row.trade_date,
+                "source": "sentiment_fact",
+                "confidence": 1.0,
+                "evidence": f"{row.trade_date} 市场情绪={row.score} {row.label or ''}".strip(),
+                "metadata": {"label": row.label, "scope": row.scope, "source": row.source},
+            })
 
     # ── 2) Build fact list from canonical XBRL ──
     for alias, canon_metric in _METRIC_ALIAS.items():
@@ -428,6 +474,8 @@ def _fact_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
             ).all()
         }
         for fact in facts:
+            if fact.get("source") in {"market_fact", "sentiment_fact"}:
+                continue
             canon = fact.get("canonical_metric") or fact["metric"]
             if canon in existing_canonical:
                 continue
@@ -494,69 +542,206 @@ def _analysis_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
         # Build abstain answer
         metric_hint = next((kw for kw in _NON_DISCLOSED_METRICS if kw in question), "该指标")
         lines = [
-            f"{ticker} 10-K 未直接披露 {metric_hint}。",
-            "EBITDA 和 Free Cash Flow 在 10-K 中通常不作为独立项目列示，需从 GAAP 报表间接推算。",
-            "当前基于已授权的 10-K 片段无法给出权威数值，建议参考 earnings release 或非 GAAP reconciliation 部分。",
+            f"{ticker} 已入库的公告/财报事实未直接披露 {metric_hint}。",
+            "EBITDA 和 Free Cash Flow 通常需要由多个报表项目间接推算。",
+            "当前基于已入库公告、财务事实和行情事实无法给出可追溯数值。",
         ]
     elif intent == "risk":
         lines = [f"{ticker} 风险因素摘要："]
         lines.extend(_citation_bullets(citations, max_items=3, preferred_terms=("risk", "risks", "may", "could", "competition", "regulatory", "风险")))
         if citations:
-            lines.append("依据以上 10-K citation 片段。")
+            lines.append("依据以上公告/财报引用片段。")
         else:
             lines.append("当前没有检索到可引用的风险因素片段。")
     elif intent == "evidence":
-        lines = [f"{ticker} 10-K 证据摘要："]
+        lines = [f"{ticker} 公告/财报证据摘要："]
         lines.extend(_citation_bullets(citations, max_items=3))
         if citations:
-            lines.append("依据以上 10-K citation 片段。")
+            lines.append("依据以上公告/财报引用片段。")
         else:
-            lines.append("当前没有检索到足够的 10-K 证据。")
+            lines.append("当前没有检索到足够的公告/财报证据。")
     elif facts or calculations:
-        lines = [f"{ticker} 10-K 分析结果："]
-        structured_facts = [
-            f for f in facts
-            if f.get("source") in {"sec_xbrl", "akshare", "structured", "market_fact"}
-        ]
-        if structured_facts:
-            value_strs = []
-            source_labels = {
-                "sec_xbrl": "SEC XBRL",
-                "akshare": "AKShare",
-                "structured": "结构化模型",
-                "market_fact": "行情事实",
-            }
-            used_sources = sorted({source_labels.get(f.get("source"), str(f.get("source"))) for f in structured_facts})
-            for f in structured_facts:
-                v = f.get("value")
-                if v is not None:
-                    raw = f"{v:.0f}" if isinstance(v, float) and v == int(v) else str(v)
-                    unit = f.get("unit") or ""
-                    if v >= 1_000_000_000:
-                        value_strs.append(f"{f['label']}={v/1e9:.2f}B {unit}".strip())
-                    elif v >= 1_000_000:
-                        value_strs.append(f"{f['label']}={v/1e6:.1f}M {unit}".strip())
-                    else:
-                        value_strs.append(f"{f['label']}={raw} {unit}".strip())
-            if value_strs:
-                source_text = "、".join(used_sources) if used_sources else "结构化数据"
-                lines.append(f"依据{source_text}结构化数据：" + "；".join(value_strs))
-        if calculations:
-            for c in calculations:
-                lines.append(f"计算结果：{c['label']}={c['value']}")
-        if citations:
-            lines.append("以上结论基于 10-K 原始检索片段，详见 citations。")
-        elif not structured_facts:
-            lines.append("当前没有检索到足够的 10-K 证据，分析可信度较低。")
+        if _is_daily_attention_question(question):
+            lines = _daily_attention_answer(ticker, facts, calculations, state.get("research_summary") or {})
+        else:
+            lines = [f"{ticker} 公告/财报分析结果："]
+            structured_facts = [
+                f for f in facts
+                if f.get("source") in {"sec_xbrl", "akshare", "structured", "market_fact", "sentiment_fact"}
+            ]
+            if structured_facts:
+                value_strs = []
+                for f in structured_facts:
+                    display = _display_fact(f)
+                    if display:
+                        value_strs.append(display)
+                if value_strs:
+                    lines.append("已入库的结构化数据：" + "；".join(value_strs))
+            if calculations:
+                for c in calculations:
+                    lines.append(_display_calculation(c))
+            if not structured_facts and citations:
+                lines.extend(_citation_bullets(citations, max_items=3))
+            elif not structured_facts:
+                lines.append("当前没有检索到足够的公告/财报证据，分析可信度较低。")
     else:
-        lines = [f"{ticker} 10-K 分析结果："]
-        lines.append("未从 10-K 中提取到结构化指标。")
-        if citations:
-            lines.append(f"共检索到 {len(citations)} 条相关片段，但无法解析出标准财务指标。")
+        lines = _insufficient_research_answer(ticker, state.get("research_summary") or {})
 
     state["answer"] = "\n".join(lines)
     state["analysis_done"] = True
     return state
+
+
+def _is_daily_attention_question(question: str) -> bool:
+    terms = ("今天", "今日", "需要关注", "变化", "情绪", "热度", "行情")
+    return any(term in question for term in terms)
+
+
+def _daily_attention_answer(ticker: str, facts: list[dict], calculations: list[dict], summary: dict | None = None) -> list[str]:
+    summary = summary or {}
+    fact_by_metric = {f.get("metric"): f for f in facts}
+    revenue = fact_by_metric.get("revenue")
+    net_income = fact_by_metric.get("net_income")
+    heat = fact_by_metric.get("heat_score")
+    sentiment = fact_by_metric.get("market_sentiment")
+    margin = next((c for c in calculations if c.get("name") == "net_margin"), None)
+
+    conclusion_bits: list[str] = []
+    if heat and heat.get("value") is not None:
+        conclusion_bits.append(f"市场热度为 {_format_plain_number(heat.get('value'))}，说明今天有一定关注度。")
+    elif (summary.get("available_signals") or {}).get("heat_score") is not None:
+        conclusion_bits.append(
+            f"市场热度为 {_format_plain_number((summary.get('available_signals') or {}).get('heat_score'))}，说明今天有一定关注度。"
+        )
+    if margin and margin.get("value") is not None:
+        margin_pct = margin["value"] * 100
+        if margin_pct < 3:
+            conclusion_bits.append(f"净利率约 {margin_pct:.2f}%，盈利弹性偏薄。")
+        elif margin_pct < 10:
+            conclusion_bits.append(f"净利率约 {margin_pct:.2f}%，盈利能力处于中等水平。")
+        else:
+            conclusion_bits.append(f"净利率约 {margin_pct:.2f}%，盈利能力相对较强。")
+    if sentiment and sentiment.get("value") is not None:
+        label = (sentiment.get("metadata") or {}).get("label") or sentiment.get("label") or "未标注"
+        conclusion_bits.append(f"市场情绪最新标签为{label}，分数 {_format_plain_number(sentiment.get('value'))}。")
+
+    lines = ["今日结论"]
+    if conclusion_bits:
+        lines.append(" ".join(conclusion_bits))
+    else:
+        lines.append("当前可用数据有限，暂时不能判断是否出现明显变化。")
+
+    lines.append("")
+    lines.append("主要原因")
+    reason_lines = []
+    if revenue and revenue.get("value") is not None:
+        reason_lines.append(f"营业收入约 {_format_money(revenue.get('value'), revenue.get('unit'))}，反映公司业务规模。")
+    if net_income and net_income.get("value") is not None:
+        reason_lines.append(f"净利润约 {_format_money(net_income.get('value'), net_income.get('unit'))}，需要结合收入规模看盈利质量。")
+    if heat and heat.get("value") is not None:
+        reason_lines.append("市场热度可作为今天市场关注度的辅助信号。")
+    if not sentiment:
+        reason_lines.append("当前未同步市场情绪数据，因此不能判断整体情绪是否正在改善或转弱。")
+    for text in (summary.get("cannot_infer") or [])[:2]:
+        if text not in reason_lines:
+            reason_lines.append(text)
+    lines.extend(reason_lines or ["已入库财务、热度和情绪数据不足，无法形成充分解释。"])
+
+    lines.append("")
+    lines.append("需要继续跟踪")
+    follow = ["后续公告是否出现业绩、重大合同、资产减值或监管问询等变化。"]
+    if heat:
+        follow.append("热度升高后是否伴随真实公告或成交变化。")
+    if not sentiment:
+        follow.append("补充市场情绪同步后，再判断这家公司是否受整体情绪影响。")
+    lines.extend(follow)
+    return lines
+
+
+def _insufficient_research_answer(ticker: str, summary: dict) -> list[str]:
+    can_infer = summary.get("can_infer") or []
+    cannot_infer = summary.get("cannot_infer") or []
+    actions = summary.get("next_actions") or []
+    signals = summary.get("available_signals") or {}
+
+    lines = ["今日结论"]
+    if signals.get("heat_score") is not None or signals.get("hot_rank") is not None:
+        heat_part = f"热度 {_format_plain_number(signals.get('heat_score'))}" if signals.get("heat_score") is not None else "热榜记录"
+        lines.append(f"{ticker} 当前只能基于{heat_part}做有限说明，不能确认基本面是否发生变化。")
+    else:
+        lines.append(f"{ticker} 当前入库数据不足，暂时无法形成可靠的公告、财务或情绪判断。")
+
+    lines.append("")
+    lines.append("主要原因")
+    lines.extend(cannot_infer[:3] or ["缺少公告/年报、结构化财务事实、行情热度或市场情绪数据。"])
+    for text in can_infer[:2]:
+        lines.append(text)
+
+    lines.append("")
+    lines.append("需要继续跟踪")
+    action_labels = [str(item.get("label")) for item in actions if item.get("label")]
+    lines.extend(action_labels[:4] or ["导入年报", "同步财务事实", "同步行情热度", "同步市场情绪"])
+    return lines
+
+
+_DISPLAY_LABELS = {
+    "Revenues": "营业收入",
+    "NetIncomeLoss": "净利润",
+    "OperatingIncomeLoss": "营业利润",
+    "Assets": "资产总计",
+    "Liabilities": "负债合计",
+    "OperatingCashFlow": "经营现金流",
+    "NetCashProvidedByUsedInOperatingActivities": "经营现金流",
+    "heat_score": "市场热度",
+    "market_sentiment": "市场情绪",
+    "revenue": "营业收入",
+    "net_income": "净利润",
+    "operating_income": "营业利润",
+    "total_assets": "资产总计",
+    "total_liabilities": "负债合计",
+    "operating_cash_flow": "经营现金流",
+}
+
+
+def _display_fact(fact: dict) -> str:
+    value = fact.get("value")
+    if value is None:
+        return ""
+    metric = fact.get("canonical_metric") or fact.get("metric") or ""
+    label = _DISPLAY_LABELS.get(metric) or _DISPLAY_LABELS.get(fact.get("metric")) or fact.get("label") or metric
+    if fact.get("metric") == "market_sentiment":
+        text_label = (fact.get("metadata") or {}).get("label") or "未标注"
+        return f"{label}={text_label}，分数 {_format_plain_number(value)}"
+    if fact.get("metric") == "heat_score":
+        return f"{label}={_format_plain_number(value)}"
+    return f"{label}={_format_money(value, fact.get('unit'))}"
+
+
+def _display_calculation(calc: dict) -> str:
+    if calc.get("name") == "net_margin" and calc.get("value") is not None:
+        return f"净利率约 {calc['value'] * 100:.2f}%，由净利润除以营业收入得到。"
+    return f"{calc.get('label') or '计算结果'}={calc.get('value')}"
+
+
+def _format_money(value: Any, unit: str | None) -> str:
+    try:
+        num = float(value)
+    except Exception:
+        return str(value)
+    suffix = "元" if unit == "CNY" else (unit or "")
+    if abs(num) >= 1_0000_0000:
+        return f"{num / 1_0000_0000:.2f}亿{suffix}"
+    if abs(num) >= 1_0000:
+        return f"{num / 1_0000:.2f}万{suffix}"
+    return f"{num:.2f}{suffix}"
+
+
+def _format_plain_number(value: Any) -> str:
+    try:
+        num = float(value)
+    except Exception:
+        return str(value)
+    return f"{num:.2f}".rstrip("0").rstrip(".")
 
 
 def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
@@ -569,7 +754,7 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     # ── 1) Basic checks ──
     groups = set(state.get("tool_groups", []))
     has_structured_grounding = any(
-        fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "structured"}
+        fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "sentiment_fact", "structured"}
         for fact in facts
     ) or bool(state.get("calculations"))
     citation_required = bool(groups & {"filing_retrieval", "announcement_search"}) or not has_structured_grounding
@@ -581,7 +766,7 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     # ── 2) Fact consistency — trust canonical/structured facts, verify regex ──
     for fact in facts:
         source = fact.get("source", "")
-        if source in {"sec_xbrl", "akshare", "market_fact", "structured"}:
+        if source in {"sec_xbrl", "akshare", "market_fact", "sentiment_fact", "structured"}:
             continue
         # Text regex facts: check evidence consistency
         evidence = fact.get("evidence", "")
@@ -641,7 +826,7 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     # Collect all canonical fact values as "supported"
     supported_numbers: set[str] = set()
     for fact in facts:
-        if fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "structured"} and fact.get("value") is not None:
+        if fact.get("source") in {"sec_xbrl", "akshare", "market_fact", "sentiment_fact", "structured"} and fact.get("value") is not None:
             v = fact["value"]
             supported_numbers.add(str(v))
             supported_numbers.add(str(round(v)))
@@ -652,11 +837,11 @@ def _verifier_node(db: Session, state: FinanceAgentState) -> FinanceAgentState:
     for cr in calc_results:
         supported_numbers.add(str(cr))
         supported_numbers.add(str(round(cr, 4)))
+        supported_numbers.add(f"{cr * 100:.2f}")
 
     unsupported = [
         n.strip() for n in answer_numbers
         if n.strip() and any(ch.isdigit() for ch in n)
-        and not (n.strip() == "10" and "10-K" in answer)
         and re.sub(r"[^0-9.]", "", n.strip()) not in ignored_numbers
         and n.strip() not in cited_text
         and not any(str(sn) in n for sn in supported_numbers if sn)
@@ -742,4 +927,20 @@ def _summarize_state(state: FinanceAgentState) -> dict[str, Any]:
         "verification": state.get("verification"),
         "answer_preview": (state.get("answer") or "")[:240],
         "tool_groups": state.get("tool_groups", []),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "estimated_tokens": False,
+        "provider": "deterministic",
+        "model": "finance_mas",
+        "cache_hit": False,
     }
+
+
+def _safe_write_finance_trace(db: Session, run_id: int) -> None:
+    try:
+        from app.services.finance_observability import write_finance_agent_trace
+
+        write_finance_agent_trace(db, run_id)
+    except Exception:
+        pass

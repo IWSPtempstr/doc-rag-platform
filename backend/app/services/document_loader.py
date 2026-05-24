@@ -54,8 +54,11 @@ def _load_text(file_path: str) -> str:
 
 
 def _load_html(file_path: str) -> str:
-    from app.services.sec_connector import load_filing_text
-    return load_filing_text(file_path)
+    raw = Path(file_path).read_text(encoding="utf-8", errors="ignore")
+    raw = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw)
+    raw = re.sub(r"(?is)<style.*?>.*?</style>", " ", raw)
+    raw = re.sub(r"(?s)<[^>]+>", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
 
 
 def load_document_v2(file_path: str) -> dict:

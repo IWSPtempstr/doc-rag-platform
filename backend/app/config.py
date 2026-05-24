@@ -85,7 +85,10 @@ class Config:
     AUTH_SECRET = os.getenv("AUTH_SECRET", os.getenv("JWT_SECRET", "dev-only-change-me"))
     AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rag_finance_session")
     AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "604800"))
-    SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "FinancialRAGWorkbench/0.1 contact@example.com")
+
+    # A-share daily data sync
+    ASHARE_DAILY_SYNC_ENABLED = os.getenv("ASHARE_DAILY_SYNC_ENABLED", "true").lower() == "true"
+    ASHARE_DAILY_SYNC_HOUR = int(os.getenv("ASHARE_DAILY_SYNC_HOUR", "3"))
 
 
 config = Config()

@@ -13,7 +13,7 @@ from app.services.embedding_provider import get_embeddings
 from app.services.vector_store import add_chunks, delete_document
 from app.services.trace_service import log_ingestion
 from app.services.vision_service import generate_caption
-from app.services.finance_sections import attach_section_metadata, parse_10k_sections
+from app.services.finance_sections import attach_section_metadata, parse_financial_report_sections
 from app.models import FilingModel, FilingSectionModel, ImageAssetModel
 
 JOB_MAX_RETRIES = config.JOB_MAX_RETRIES
@@ -60,7 +60,7 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
         doc_data = load_document_v2(file_path)
         text = doc_data["text"]
         image_assets = doc_data.get("images", [])
-        filing_sections = parse_10k_sections(text) if filing and filing.filing_type == "10-K" else []
+        filing_sections = parse_financial_report_sections(text) if filing else []
         if filing:
             db.query(FilingSectionModel).filter(FilingSectionModel.filing_id == filing.id).delete()
             for section in filing_sections:
@@ -165,7 +165,7 @@ def process_job(job_id: int, document_id: int, file_path: str, content_type: str
                 embedding_provider=embedding_provider,
                 embedding_model=embed_model,
                 image_asset_map=image_asset_map,
-                extra_metadata=_filing_vector_metadata(filing) if filing else None,
+                extra_metadata=_filing_vector_metadata(filing) if filing else _document_vector_metadata(doc),
             )
             stages.append({"stage": "index", "duration_ms": round((time.time() - t0) * 1000, 2)})
         else:
@@ -309,6 +309,30 @@ def _filing_vector_metadata(filing: FilingModel) -> dict:
         "exchange": metadata.get("exchange") or (filing.company.exchange if filing.company else None),
         "disclosure_category": metadata.get("disclosure_category"),
     }
+
+
+def _document_vector_metadata(doc: DocumentModel) -> dict:
+    tags = {}
+    for part in (doc.tags or "").split(","):
+        if ":" not in part:
+            continue
+        key, value = part.split(":", 1)
+        tags[key.strip()] = value.strip()
+    return {
+        "workspace_id": _to_int(tags.get("workspace")),
+        "company_ticker": tags.get("company_ticker") or tags.get("ticker"),
+        "ticker": tags.get("ticker"),
+        "context_kind": tags.get("context_kind"),
+        "trade_date": tags.get("trade_date"),
+        "source": "synthetic_rag_context" if "rag_context" in (doc.tags or "") else None,
+    }
+
+
+def _to_int(value: str | None) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
 
 
 def main():

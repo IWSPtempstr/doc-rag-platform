@@ -1,7 +1,7 @@
 """A-share disclosure connector.
 
-The connector normalizes public CNINFO announcements into the same
-Document/Filing ingestion pipeline used by SEC filings.
+The connector normalizes public CNINFO announcements into the platform
+Document/Filing ingestion pipeline.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def download_announcement(announcement: dict[str, Any], output_dir: str | None =
     url = announcement.get("download_url")
     if not url:
         raise ValueError("公告缺少 download_url")
-    base_dir = output_dir or os.path.join(config.PUBLIC_DATA_DIR, "ashare", "cninfo", "filings")
+    base_dir = output_dir or os.path.join(config.UPLOAD_DIR, "ashare", "cninfo", "filings")
     os.makedirs(base_dir, exist_ok=True)
     suffix = os.path.splitext(url.split("?")[0])[1] or ".pdf"
     filename = f"{announcement.get('stock_code')}_{announcement.get('fiscal_year')}_{announcement.get('announcement_id')}{suffix}"

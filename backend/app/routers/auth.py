@@ -40,6 +40,28 @@ def get_current_workspace(
     return current_user, membership.workspace
 
 
+def require_admin_role(db: Session, user_id: int, workspace_id: int) -> MembershipModel:
+    membership = (
+        db.query(MembershipModel)
+        .filter(MembershipModel.user_id == user_id, MembershipModel.workspace_id == workspace_id)
+        .first()
+    )
+    if not membership:
+        raise HTTPException(403, "你没有该工作空间的访问权限")
+    if membership.role not in {"admin", "owner"}:
+        raise HTTPException(403, "需要管理员权限")
+    return membership
+
+
+def get_current_admin_workspace(
+    workspace_id: int = Query(1, alias="workspace_id"),
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> tuple[UserModel, WorkspaceModel]:
+    membership = require_admin_role(db, current_user.id, workspace_id)
+    return current_user, membership.workspace
+
+
 @router.post("/login", response_model=MeResponse)
 def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = authenticate_or_bootstrap(db, req.email, req.password, req.name)
@@ -84,6 +106,14 @@ def _me_response(db: Session, user_id: int) -> MeResponse:
     workspaces = [m.workspace for m in memberships if m.workspace]
     return MeResponse(
         user=UserResponse.model_validate(user),
-        workspaces=[WorkspaceResponse.model_validate(w) for w in workspaces],
+        workspaces=[
+            WorkspaceResponse(
+                id=m.workspace.id,
+                name=m.workspace.name,
+                slug=m.workspace.slug,
+                created_at=m.workspace.created_at,
+                role=m.role,
+            )
+            for m in memberships if m.workspace
+        ],
     )
-

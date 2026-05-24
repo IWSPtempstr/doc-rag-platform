@@ -100,8 +100,8 @@ export default function DocumentsPage() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h1 style={{ fontSize: font.xxl, fontWeight: 700, margin: 0 }}>文档管理</h1>
-        <span style={{ fontSize: font.xs, color: colors.textMuted }}>{docs.length} 个文档</span>
+        <h1 style={{ fontSize: font.xxl, fontWeight: 700, margin: 0 }}>公告资产</h1>
+        <span style={{ fontSize: font.xs, color: colors.textMuted }}>{docs.length} 个公告/年报资产</span>
       </div>
 
       {/* Toolbar */}
@@ -117,13 +117,13 @@ export default function DocumentsPage() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          {uploading ? "上传中..." : "上传文档"}
+          {uploading ? "上传中..." : "上传公告/年报"}
           <input type="file" accept=".pdf,.docx,.md,.txt,.png,.jpg,.jpeg,.gif,.webp,.bmp"
             onChange={handleUpload} style={{ display: "none" }} />
         </label>
 
         <input
-          placeholder="搜索文件名..."
+          placeholder="搜索公司代码、公告名或文件名..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ ...inputBase, flex: 1, minWidth: 180 }}
@@ -177,7 +177,7 @@ export default function DocumentsPage() {
               <th style={thStyle}><input type="checkbox" checked={selected.size === docs.length && docs.length > 0} onChange={toggleAll}
                 style={{ width: 14, height: 14, cursor: "pointer", accentColor: colors.primary }} /></th>
               <th style={thStyle}>ID</th>
-              <th style={thStyle}>文件名</th>
+              <th style={thStyle}>公告/年报资产</th>
               <th style={thStyle}>类型</th>
               <th style={thStyle}>大小</th>
               <th style={thStyle}>状态</th>
@@ -205,6 +205,7 @@ export default function DocumentsPage() {
                 <td style={{ ...tdStyle, cursor: "pointer", color: colors.accent, fontWeight: 500 }}
                   onClick={() => router.push(`/documents/${d.id}`)}>
                   {d.filename}
+                  {d.tags && <div style={{ color: colors.textMuted, fontSize: font.xs, marginTop: 3 }}>{assetSummary(d.tags)}</div>}
                 </td>
                 <td style={tdStyle}>
                   <span style={{
@@ -250,8 +251,8 @@ export default function DocumentsPage() {
               <tr>
                 <td colSpan={10} style={{ padding: 48, textAlign: "center" }}>
                   <div style={{ fontSize: 36, marginBottom: 8, opacity: 0.3 }}>&#128196;</div>
-                  <div style={{ color: colors.textMuted, fontSize: font.base }}>暂无文档</div>
-                  <div style={{ color: colors.textMuted, fontSize: font.xs, marginTop: 4 }}>上传 PDF、DOCX、MD、TXT 或图片文件</div>
+                  <div style={{ color: colors.textMuted, fontSize: font.base }}>暂无公告资产</div>
+                  <div style={{ color: colors.textMuted, fontSize: font.xs, marginTop: 4 }}>上传公告、年报 PDF 或图片文件</div>
                 </td>
               </tr>
             )}
@@ -273,4 +274,12 @@ function formatSize(bytes: number) {
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function assetSummary(tags: string) {
+  const parts = tags.split(",").map((item) => item.trim()).filter(Boolean);
+  const ticker = parts.find((item) => /^\d{6}$/.test(item));
+  const type = parts.find((item) => item.includes("report") || item.includes("announcement"));
+  const year = parts.find((item) => /^20\d{2}$/.test(item));
+  return [ticker && `公司 ${ticker}`, type && `类型 ${type}`, year && `年份 ${year}`].filter(Boolean).join(" · ") || tags;
 }

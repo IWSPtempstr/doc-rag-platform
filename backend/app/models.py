@@ -103,6 +103,17 @@ class MembershipModel(Base):
     workspace = relationship("WorkspaceModel", back_populates="memberships")
 
 
+class UserWatchlistModel(Base):
+    __tablename__ = "user_watchlists"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    ticker = Column(String(20), nullable=False, index=True)
+    priority = Column(Integer, default=100)
+    created_at = Column(DateTime, default=_utcnow)
+
+
 class CompanyModel(Base):
     __tablename__ = "companies"
 
@@ -129,7 +140,7 @@ class FilingModel(Base):
     company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False)
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     accession_number = Column(String(80), nullable=True, index=True)
-    filing_type = Column(String(20), default="10-K")
+    filing_type = Column(String(20), default="annual_report")
     fiscal_year = Column(Integer, nullable=False)
     filed_at = Column(DateTime, nullable=True)
     source_url = Column(String(1000), nullable=True)
@@ -196,6 +207,50 @@ class MarketFactModel(Base):
     created_at = Column(DateTime, default=_utcnow)
 
     company = relationship("CompanyModel", back_populates="market_facts")
+
+
+class SentimentFactModel(Base):
+    __tablename__ = "sentiment_facts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    ticker = Column(String(20), nullable=True, index=True)
+    trade_date = Column(String(20), nullable=False, index=True)
+    scope = Column(String(50), default="market")
+    score = Column(Float, nullable=True)
+    label = Column(String(120), nullable=True)
+    source = Column(String(120), default="akshare")
+    evidence = Column(Text, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+
+class DailyBriefModel(Base):
+    __tablename__ = "daily_briefs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    trade_date = Column(String(20), nullable=False, index=True)
+    status = Column(String(30), default="generated")
+    summary = Column(Text, nullable=True)
+    items = Column(JSON, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    generated_at = Column(DateTime, default=_utcnow)
+
+
+class DataSyncJobModel(Base):
+    __tablename__ = "data_sync_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    job_type = Column(String(80), nullable=False)
+    source = Column(String(120), nullable=False)
+    status = Column(String(30), default="running")
+    started_at = Column(DateTime, default=_utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    metrics = Column(JSON, nullable=True)
 
 
 class AgentRunModel(Base):

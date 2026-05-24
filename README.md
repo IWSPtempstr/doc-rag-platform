@@ -1,420 +1,217 @@
-# 财报分析工作台 v2.1
+# A 股公告与情绪分析工作台
 
-SEC 10-K + A 股公告 + Public Finance QA Workbench — 一个基于 FastAPI + Next.js + Redis + Chroma + LangGraph MAS + MCP 的财报分析工作台。项目主线使用公开数据：SEC EDGAR 10-K / CompanyFacts、巨潮资讯 CNINFO 公告、FinQA、TAT-QA；FinanceBench 仅作为非商用许可的补充评测集。
+面向 A 股上市公司的公告、财报、行情热度与市场情绪研究辅助系统。项目主线已经收敛为 A 股公开数据，不再把 SEC、FinQA、TAT-QA、FinanceBench 或通用文档 RAG 作为产品入口。
+
+系统提供两类视角：
+
+- 普通用户：每日简报、关注公司、热点 Top20、公告资产、公司详情、个性化分析和历史查询。
+- 管理员：数据源连接、日更任务、同步日志、评估管理、健康检查和索引诊断。
+
+分析结果定位为研究辅助：解释“为什么今天值得关注”，展示公告、财务事实、行情热度和市场情绪的可用依据；不输出买卖建议、目标价或交易信号。
+
+## 当前能力
+
+### 用户侧
+
+- `/finance`：用户首页，展示每日简报、关注公司、热点 Top20、市场情绪趋势、异常公告入口和个性化分析入口。
+- `/finance/companies/{ticker}`：公司详情页，优先展示业务摘要、今日变化、可用信号、缺失信息和下一步补全动作。
+- `/finance/agent`：A 股个性化分析页，支持历史查询记录展示和删除。
+- `/documents`：公告资产页，用于查看已导入公告/年报和索引状态。
+
+普通用户不会看到数据源管理、评估管理、系统设置、健康检查和底层索引诊断入口。
+
+### 管理员侧
+
+- `/finance/connectors`：CNINFO、AKShare、TuShare、A 股 MCP、Chroma 等连接状态和失败原因。
+- `/finance/evaluations`：A 股专项评估结果与失败原因分布。
+- 后端 `/api/admin/finance/*`：连接器测试、日更任务、同步历史和评估结果。
+- 技术诊断：公司数据覆盖、文档索引、section、chunk、fact、Chroma 覆盖情况。
+
+### 数据链路
+
+- CNINFO 公告/年报导入后生成 `Document / Filing`，并进入 worker 索引流程。
+- AKShare/TuShare 同步结构化财务事实，写入 `FinancialFact`。
+- 行情热度写入 `MarketFact`，市场级情绪写入 `SentimentFact`。
+- 每日简报 Top20、用户关注、公告搜索会自动生成 RAG context 文档，并进入 Chroma 索引，保证后续 Agent 能检索到这些上下文。
+- 公司数据不足时，后端 `research_summary` 会统一返回可用信号、缺失项、缺失原因、可执行动作和分析边界，避免页面空白或编造基本面结论。
+
+### 每日简报规则
+
+- 用户没有关注公司时：展示当日市场热度 Top20。
+- 用户已有关注公司时：先展示关注公司，再展示去重后的市场热度 Top20。
+- 热榜来源优先使用 AKShare 东方财富热榜；失败时降级到行情、涨跌幅、成交额、公告数量等可用信号。
+- 市场情绪优先使用 AKShare 新闻情绪接口；接口失败时写入本地覆盖型 fallback 记录，并展示同步状态和失败原因。
 
 ## 技术栈
 
-| 组件 | 技术 |
-|------|------|
+| 层 | 技术 |
+| --- | --- |
 | 后端 | FastAPI + SQLAlchemy + SQLite |
 | 前端 | Next.js 14 + React 18 + TypeScript |
-| 缓存/队列 | Redis (Streams, Cache, Rate Limit) |
-| 向量库 | ChromaDB |
-| PDF 处理 | PyMuPDF (fitz) |
-| 视觉模型 | OpenAI-compatible Vision API (GPT-4o 等多模态模型) |
-| LLM/Embedding | Chat 使用 DeepSeek/OpenAI-compatible API，Embedding 默认使用本地 Ollama |
-| MCP | Python stdin/stdout JSON-RPC |
-| A 股数据 | CNINFO 公告 connector，AKShare 可选结构化事实/行情 provider |
-
-## 功能
-
-### v1
-- 文档上传（PDF/DOCX/MD/TXT）和 CRUD 管理
-- 异步任务处理（Redis Streams + Worker）
-- 实时进度追踪
-- RAG 问答（Dense Retrieval + LLM Generation）
-- Redis 缓存（cache-aside pattern）
-- 接口限流
-- Chat Session/Message 历史
-- Chat Provider 与 Embedding Provider 独立配置
-- 健康检查（SQLite/Redis/Chroma/Provider/Queue）
-
-### v2.0
-- 财报工作台：SEC EDGAR 10-K 导入、CompanyFacts/XBRL facts、10-K 章节浏览、Agent 分析轨迹
-- 公共数据集闭环：SEC 10-K、Custom 10-K、FinQA、TAT-QA、FinanceBench sample 的导入、冻结、评估
-- 数据治理：source/license/public_data_only/admissibility/failure_reason/coverage 元数据
-- 中心化 LangGraph MAS：Retrieval、Fact Extraction、Calculation、Analysis、Verifier 节点记录 AgentStep
-- Benchmark report：可输出公开数据集、覆盖率、失败原因和最新指标
-- PDF 图片提取：PyMuPDF 提取 PDF 内嵌图片
-- 图片上传：支持 PNG/JPG/GIF/WebP/BMP 作为独立文档
-- Vision 描述生成：调用多模态 Vision API 为图片生成中文描述
-- 图片资产管理：图片关联到 chunks，存储 source_page、caption、associated_chunks
-- 文档重新索引：一键重置并重新处理文档，保留标签和元数据
-- 文档详情页：展示 chunks + 图片资产 + 任务历史 + 进度追踪
-- 增强文档列表：搜索、状态筛选、图片筛选、批量操作
-- Docker 健康检查：所有服务（redis/backend/worker/frontend/mcp）添加 healthcheck
-- 持久化卷文档：标注所有 Docker volume 的用途
-
-### v2.1
-- A 股公告 connector：通过 CNINFO 检索公告、定位完整年报、下载 PDF，并标准化为 `Document / Filing / Job`
-- A 股 metadata 入库：`market/source/exchange/stock_code/announcement_id/disclosure_category` 写入 `Filing.metadata_json`
-- A 股索引过滤：worker 将 `market/source/exchange/disclosure_category` 写入 Chroma metadata，retriever 支持 `where` 过滤
-- 结构化事实扩展：新增 `MarketFactModel`，支持 A 股行情事实入库；财务事实可通过 AKShare 同步到 `FinancialFactModel`
-- A 股 MCP 工具：公告搜索、年报定位、公告下载、已入库 filing 查询、行情事实查询
-- 日更脚本：`scripts/ashare_daily_update.py` 支持每日固定时间拉取跟踪公司的最新公告并同步可选行情事实
-- A 股覆盖报告：`scripts/ashare_benchmark_report.py` 输出 A 股 filing、文档、chunk、section、fact、market fact 覆盖情况
-
-### v1.1
-- Hybrid Search: Dense + BM25 Sparse + RRF Fusion
-- 可选 Rerank
-- Trace: Ingestion Trace / Query Trace (JSONL)
-- Evaluation: Golden Questions (Hit Rate, Context Precision, Faithfulness, Answer Relevancy)
-- Collections 管理
-- 扩展 MCP 工具
+| 队列/缓存 | Redis |
+| 向量索引 | ChromaDB |
+| 文档处理 | PyMuPDF、文档切片、图片 caption |
+| Agent | LangGraph MAS + deterministic calculation + verifier |
+| 数据源 | CNINFO、AKShare、TuShare、A 股 MCP provider |
+| 评估与追踪 | EvalDataset/EvalCase/EvalResult、AgentRun/AgentStep、JSONL trace |
 
 ## 快速启动
 
-### 前置条件
-
-- Docker 和 Docker Compose
-- Chat API Key：DeepSeek 或兼容 `/v1/chat/completions` 的服务
-- 本地 Embedding：Ollama + `nomic-embed-text`
-- 或：Python 3.12+, Node.js 20+, Redis 7+, Ollama
-
-### Docker Compose 启动
+### Docker Compose
 
 ```bash
-cd workspace
+cd /home/work/worktowork/workspace
 cp .env.example .env
-# 编辑 .env，填入 CHAT_API_KEY，默认 Chat 走 DeepSeek，Embedding 走本地 Ollama
-docker compose up
+docker compose up -d --build
 ```
 
-访问：
+访问地址：
+
 - 前端：http://localhost:3000
 - 后端 API：http://localhost:8000
 - API 文档：http://localhost:8000/docs
 
-## 公开数据 Demo 流程
+如果只修改前端或后端代码，可按服务重建：
 
 ```bash
-cd workspace
-set -a; source .env; set +a
-
-# 后端、worker、前端启动后，在 /finance/evaluations 页面依次执行：
-# 1. 导入 SEC 10-K 或绑定本地 10-K 文档
-# 2. 构建 SEC 10-K 数据集
-# 3. 生成自建 10-K Cases
-# 4. 导入 FinQA Sample / TAT-QA Sample
-# 5. 冻结数据集后运行评估
-
-# 生成报告
-PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/finance_benchmark_report.py --workspace-id 1
+docker compose up -d --build backend worker frontend
 ```
 
-数据集冻结时会保留 approved 且 admissible 的 case。`custom_10k` 会记录 document/chunk/section/fact/chroma 覆盖，并将 `document_not_indexed`、`index_incomplete`、`gold_not_retrievable` 等失败原因留在 case metadata 中。
+### 本地 conda 开发
 
-公开 benchmark 原始文件、FinQA/TAT-QA 派生文档、SEC EDGAR 导入的 10-K 文件统一放在 `/home/work/worktowork/data/public_datasets`。通过 `DATA_DIR` 和 `PUBLIC_DATA_DIR` 可以覆盖该路径。
-
-## A 股公开数据 Demo 流程
+本地 Python 环境使用 `agent-learning`，配置读取 `/home/work/worktowork/workspace/.env`。
 
 ```bash
-cd workspace
+cd /home/work/worktowork/workspace
 set -a; source .env; set +a
 
-# 1. 在 /finance 添加 6 位 A 股代码，例如 600519
-# 2. 输入年报年份，例如 2023，点击“导入A股年报”
-# 3. worker 完成 ingestion 后，A 股公告 PDF 会进入 Document/Filing/Chroma
+# 后端
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 
-# 可选：同步 AKShare 行情事实
-PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/ashare_daily_update.py \
-  --workspace-id 1 \
-  --tickers 600519 \
-  --lookback-days 30 \
-  --sync-market
+# worker
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python -m app.worker
 
-# 生成 A 股覆盖报告
-PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python scripts/ashare_benchmark_report.py --workspace-id 1
-```
-
-A 股公告文件默认保存到 `/home/work/worktowork/data/public_datasets/ashare/cninfo/filings`，日更摘要保存到 `/home/work/worktowork/data/public_datasets/ashare/daily_runs`。
-
-当前已创建应用内自动化任务 `a-share-daily-update`，每日 `03:00` 运行 A 股日更脚本。跟踪范围来自已入库的 A 股公司；若没有 A 股公司，脚本会输出空 tickers 的运行摘要。
-
-### 本地开发
-
-```bash
-# 1. 安装 Python 依赖
-pip install -r requirements.txt
-
-# 可选：A 股结构化财务事实/行情同步需要 AKShare
-pip install akshare
-
-# 2. 配置 Chat Provider 与 Embedding Provider
-export CHAT_PROVIDER=openai
-export CHAT_API_KEY=sk-...
-export CHAT_API_BASE=https://your-api-endpoint.com
-export CHAT_MODEL=your-chat-model
-export EMBEDDING_PROVIDER=ollama
-export EMBEDDING_MODEL=nomic-embed-text
-export OLLAMA_BASE_URL=http://localhost:11434
-
-# 3. 启动 Redis
-redis-server
-
-# 4. 启动后端
-cd backend
-uvicorn app.main:app --reload --port 8000
-
-# 5. 启动 Worker
-python -m app.worker
-
-# 6. 启动前端
+# 前端
 cd frontend
 npm install
 npm run dev
-
-# 7. 启动 MCP Server
-cd mcp
-python server.py
 ```
+
+## Demo 账号
+
+Docker 演示库中可使用：
+
+| 角色 | 邮箱 | 密码 |
+| --- | --- | --- |
+| 普通用户 | `user@example.com` | `user123456` |
+| 管理员 | `manager@example.com` | `admin123456` |
+
+登录后普通用户默认进入 `/finance`；管理员可进入 `/finance/connectors` 等管理页面。
+
+## Demo 流程
+
+1. 使用普通用户登录，进入 `/finance`。
+2. 查看每日简报。没有关注公司时，系统展示市场热度 Top20；点击条目进入公司详情。
+3. 添加关注公司，例如 `600519`。关注动作会写入用户 watchlist，并生成可检索的 RAG context。
+4. 在公司详情页查看研究摘要：当前能判断什么、不能判断什么、缺失原因和下一步补全动作。
+5. 进入 `/finance/agent` 提问，例如“结合公告、财务事实、行情热度和市场情绪，解释这家公司今天需要关注的变化。”
+6. 查看历史查询记录；不需要的记录可删除。
+7. 使用管理员登录，进入 `/finance/connectors`，运行连接器测试或手动触发日更任务。
+
+## 主要 API
+
+### Auth
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/auth/login` | 登录并写入 HTTP-only cookie |
+| POST | `/api/auth/logout` | 退出登录 |
+| GET | `/api/auth/me` | 当前用户、工作空间与角色 |
+
+### 用户侧 Finance API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/finance/watchlist` | 关注公司列表 |
+| POST | `/api/finance/watchlist` | 添加或更新关注公司，并写入 RAG context |
+| DELETE | `/api/finance/watchlist/{ticker}` | 取消关注公司 |
+| GET | `/api/finance/daily-brief` | 获取站内每日简报 |
+| GET | `/api/finance/companies` | A 股公司列表 |
+| POST | `/api/finance/companies` | 创建轻量公司记录 |
+| GET | `/api/finance/companies/{ticker}` | 公司详情 |
+| GET | `/api/finance/companies/{ticker}/research-summary` | 公司研究摘要与数据缺失说明 |
+| GET | `/api/finance/ashare/companies/{ticker}/announcements` | 检索 CNINFO 公告，并写入 RAG context |
+| POST | `/api/finance/ashare/companies/{ticker}/filings/import` | 导入年报公告 |
+| POST | `/api/finance/ashare/companies/{ticker}/facts/sync` | 同步结构化财务事实 |
+| POST | `/api/finance/ashare/companies/{ticker}/market/sync` | 同步行情事实 |
+| GET | `/api/finance/sentiment` | 查询市场或个股情绪事实 |
+| POST | `/api/finance/agent/query` | 运行个性化分析 Agent |
+| GET | `/api/finance/agent/runs` | 查询个人历史分析记录 |
+| DELETE | `/api/finance/agent/runs/{run_id}` | 删除个人历史分析记录 |
+| GET | `/api/finance/agent/runs/{run_id}/trace` | 查询单次 Agent 轨迹 |
+
+### 管理员 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/admin/finance/connectors/status` | 数据源与索引状态 |
+| POST | `/api/admin/finance/connectors/{name}/test` | 连接器测试 |
+| POST | `/api/admin/finance/jobs/daily-sync/run` | 手动运行日更任务 |
+| GET | `/api/admin/finance/jobs/daily-sync/history` | 日更历史 |
+| GET | `/api/admin/finance/evaluations/results` | 评估结果 |
+
+## 数据与评估
+
+数据统一放在 `/home/work/worktowork/data`。当前产品口径只保留 A 股专项数据集：
+
+- `ashare_announcement`：公告检索与证据召回。
+- `ashare_financial_fact`：年报财务事实与数值一致性。
+- `ashare_market_sentiment`：市场情绪和热度解释。
+- `ashare_daily_brief`：每日简报排序、覆盖和缺失原因。
+
+评估维度：
+
+- 响应质量：检索命中、证据召回、事实 grounding、数值准确率、拒答准确率。
+- 轨迹状态：预期路径匹配、工具组召回、异常工具调用、verifier 修复率。
+- 效率与稳定性：端到端延迟、节点耗时、token 使用、失败类型、告警事件。
 
 ## 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| DATABASE_URL | sqlite:///./storage/app.db | SQLite 路径 |
-| REDIS_URL | redis://localhost:6379/0 | Redis 连接 |
-| DATA_DIR | /home/work/worktowork/data | 公开数据集与派生产物根目录 |
-| PUBLIC_DATA_DIR | /home/work/worktowork/data/public_datasets | FinQA/TAT-QA/FinanceBench 等公开数据缓存 |
-| CHAT_PROVIDER | openai | Chat Provider，支持 openai/ollama |
-| CHAT_API_KEY | (空) | DeepSeek/OpenAI-compatible Chat API Key |
-| CHAT_API_BASE | https://api.openai.com/v1 | Chat API Base |
-| CHAT_MODEL | deepseek-v4-flash | Chat 模型 |
-| EMBEDDING_PROVIDER | ollama | Embedding Provider，支持 ollama/openai |
-| EMBEDDING_MODEL | nomic-embed-text | Embedding 模型 |
-| EMBEDDING_API_KEY | (空) | API embedding key，仅 `EMBEDDING_PROVIDER=openai` 时需要 |
-| EMBEDDING_API_BASE | https://api.openai.com/v1 | API embedding base |
-| OPENAI_API_KEY | (空) | 兼容旧变量，作为 `CHAT_API_KEY` 回退 |
-| OPENAI_API_BASE | (空) | 兼容旧变量，作为 `CHAT_API_BASE` 回退 |
-| OLLAMA_BASE_URL | http://localhost:11434 | Ollama API |
-| RAG_CACHE_TTL_SECONDS | 3600 | 缓存过期(秒) |
-| CHAT_RATE_LIMIT_PER_MINUTE | 20 | 问答限流 |
-| UPLOAD_RATE_LIMIT_PER_MINUTE | 10 | 上传限流 |
-| JOB_MAX_RETRIES | 3 | 任务最大重试 |
-| VISION_API_KEY | (CHAT_API_KEY) | Vision API Key，用于图片描述生成 |
-| VISION_API_BASE | (CHAT_API_BASE) | Vision API Base |
-| VISION_MODEL | gpt-4o | Vision 模型（需多模态模型） |
-| AUTH_SECRET | change-me-in-production | HTTP-only JWT cookie 签名密钥 |
-| SEC_USER_AGENT | FinancialRAGWorkbench/0.1 your-email@example.com | SEC EDGAR 请求必须配置的 User-Agent |
-| DEFAULT_WORKSPACE_ID | 1 | A 股日更脚本默认 workspace |
-| DEFAULT_TOP_K | 5 | 检索结果数 |
-| DEFAULT_CHUNK_SIZE | 500 | 切片大小 |
-| DEFAULT_CHUNK_OVERLAP | 50 | 切片重叠 |
-| RERANK_ENABLED | false | 启用 Rerank |
+| 变量 | 说明 |
+| --- | --- |
+| `DATABASE_URL` | SQLite 路径 |
+| `REDIS_URL` | Redis 地址 |
+| `DATA_DIR` | 数据根目录 |
+| `PUBLIC_DATA_DIR` | 公开数据缓存目录 |
+| `CHAT_PROVIDER` / `CHAT_API_KEY` / `CHAT_API_BASE` / `CHAT_MODEL` | Chat provider 配置 |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | Embedding provider 配置 |
+| `AUTH_SECRET` | HTTP-only JWT cookie 签名密钥 |
+| `ASHARE_DAILY_SYNC_ENABLED` | 是否启用后端日更 scheduler，默认 `true` |
+| `ASHARE_DAILY_SYNC_HOUR` | A 股日更小时，默认 `3`，按 Asia/Shanghai 计算 |
+| `TUSHARE_TOKEN` | 可选，TuShare provider 令牌 |
 
-## 本地 Embedding 可行性
-
-当前默认由本地 Ollama 的 `nomic-embed-text` 负责向量化，Chat 由 DeepSeek/OpenAI-compatible API 负责生成回答。这个组合用于避开本地 7B Chat 推理的 GPU/内存不稳定问题，同时保留本地向量化能力。
-
-已验证的本地条件：
-
-- `nomic-embed-text` 已安装，模型约 274 MB。
-- 本地 embedding 调用可返回 768 维向量。
-- RTX 4060 Ti 可被 WSL 识别，但 Ollama Chat 7B 曾出现 CPU 路径和 runner 退出问题。
-- 文档向量按 embedding 配置写入独立 Chroma collection，例如 `documents__ollama__nomic-embed-text`。
-
-切换 `EMBEDDING_PROVIDER` 或 `EMBEDDING_MODEL` 后，需要重新索引文档。不同 embedding 模型的向量维度可能不同，不能混用同一个 Chroma collection。
-
-## API 概览
-
-### v1
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /api/documents/upload | 上传文档 |
-| GET | /api/documents | 文档列表 |
-| GET | /api/documents/{id} | 文档详情 |
-| PATCH | /api/documents/{id} | 更新文档 |
-| DELETE | /api/documents/{id} | 删除文档 |
-| GET | /api/jobs/{job_id} | 任务状态 |
-| POST | /api/chat/query | RAG 问答 |
-| GET | /api/chat/sessions | 会话列表 |
-| POST | /api/settings/provider | 更新设置 |
-| GET | /api/health | 健康检查 |
-
-### v2.0
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /api/documents/{id}/reindex | 重新索引文档 |
-| GET | /api/documents/{id}/assets | 文档图片资产 |
-| GET | /api/documents/{id}/jobs | 文档任务历史 |
-| GET | /api/assets/{path} | 图片静态文件（从 storage/assets 挂载） |
-
-### 财报工作台
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | /api/auth/login | 登录并写入 HTTP-only cookie |
-| POST | /api/auth/logout | 退出登录 |
-| GET | /api/auth/me | 当前用户与工作空间 |
-| GET | /api/finance/summary | 财报工作台总览：公司、filings、数据集、失败原因 |
-| GET | /api/finance/companies | 公司列表 |
-| POST | /api/finance/companies | 新建公司 |
-| POST | /api/finance/companies/{ticker}/filings/import | 从 SEC EDGAR 导入 10-K |
-| GET | /api/finance/ashare/companies/{ticker}/announcements | 从 CNINFO 搜索 A 股公告 |
-| POST | /api/finance/ashare/companies/{ticker}/filings/import | 从 CNINFO 导入 A 股年报公告 PDF |
-| POST | /api/finance/ashare/companies/{ticker}/facts/sync | 通过 AKShare 同步 A 股财务事实 |
-| POST | /api/finance/ashare/companies/{ticker}/market/sync | 通过 AKShare 同步 A 股行情事实 |
-| GET | /api/finance/companies/{ticker}/market-facts | 查询 A 股行情事实 |
-| GET | /api/finance/filings/{filing_id} | filing 详情 |
-| GET | /api/finance/filings/{filing_id}/sections | 10-K 章节切分结果 |
-| GET | /api/finance/filings/{filing_id}/facts | filing 结构化财务事实 |
-| POST | /api/finance/filings/{filing_id}/bind-document | 绑定本地上传的财报文档 |
-| POST | /api/finance/agent/query | 中心化 LangGraph MAS 分析 |
-| POST | /api/finance/evaluations/run | 运行公开数据集评估 |
-| GET | /api/finance/evaluations/results | 评估结果列表 |
-| GET | /api/finance/datasets | 数据集列表 |
-| POST | /api/finance/datasets/build/sec-10k | 构建 SEC 10-K 基准 |
-| POST | /api/finance/datasets/build/custom-10k | 构建自建 10-K cases |
-| POST | /api/finance/datasets/import/finqa | 导入 FinQA sample |
-| POST | /api/finance/datasets/import/tatqa | 导入 TAT-QA sample |
-| POST | /api/finance/datasets/import/financebench | 导入 FinanceBench sample |
-| POST | /api/finance/datasets/{dataset_id}/freeze | 冻结数据集 |
-
-### v1.1
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | /api/collections | 集合列表 |
-| GET | /api/documents/{id}/chunks | 文档 chunks |
-| GET | /api/traces/ingestion | Ingestion trace |
-| GET | /api/traces/query | Query trace |
-| POST | /api/evaluations/run | 运行评估 |
-| GET | /api/evaluations/results | 评估结果 |
-
-## 评估产物
-
-- `scripts/finance_benchmark_report.py`：从本地 SQLite 生成公开数据集报告（Markdown/JSON）
-- `scripts/ashare_benchmark_report.py`：生成 A 股公告/索引/事实覆盖报告
-- `scripts/ashare_daily_update.py`：A 股公告与行情事实日更脚本
-- `backend/tests/test_finance_public_datasets.py`：公开数据集导入与 manifest 约束测试
-- `backend/tests/test_ashare_connector.py`：CNINFO metadata 归一化、年报筛选、公告类型识别
-- `backend/tests/test_ashare_mcp.py`：A 股 MCP 工具注册与调用
-- `backend/tests/test_ashare_finance_sync.py`：AKShare 财报 period 归一化
-
-## MCP 工具
-
-| 工具 | 说明 |
-|------|------|
-| search_documents | 搜索文档向量库 |
-| ask_knowledge_base | 向知识库提问 |
-| query_knowledge_hub | 通用知识库查询 |
-| list_collections | 列出所有集合 |
-| get_document_summary | 获取文档摘要 |
-| search_ashare_announcements | 搜索 CNINFO A 股公告并返回标准化 metadata |
-| get_ashare_annual_report | 获取指定 A 股公司指定年份的完整年度报告公告 |
-| download_ashare_announcement | 下载标准化公告对象对应的 PDF |
-| get_ashare_filings_by_company | 查询已入库 A 股公司 filings |
-| list_ashare_market_facts | 查询已入库 A 股行情事实 |
-
-## cURL 示例
-
-财报工作台接口使用 HTTP-only cookie 鉴权。下面的 `finance` 示例假设已先登录并把 cookie 保存到 `/tmp/rag_cookie.txt`。
+## 验证命令
 
 ```bash
-# 登录
-curl -c /tmp/rag_cookie.txt -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"demo@example.com","password":"demo-password","name":"Demo"}'
+cd /home/work/worktowork/workspace
+set -a; source .env >/dev/null 2>&1; set +a
 
-# 上传文档
-curl -F "file=@test.pdf" -F "tags=技术文档" http://localhost:8000/api/documents/upload
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python -m pytest -s -q backend/tests/test_ashare_daily_brief.py backend/tests/test_finance_tool_routing.py backend/tests/test_finance_connectors.py
+PYTHONPATH=backend /root/anaconda3/envs/agent-learning/bin/python -m compileall -q backend/app
 
-# 问答
-curl -X POST http://localhost:8000/api/chat/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "什么是RAG？"}'
-
-# 健康检查
-curl http://localhost:8000/api/health
-
-# 运行评估
-curl -X POST http://localhost:8000/api/evaluations/run \
-  -H "Content-Type: application/json" \
-  -d '{"strategy": "hybrid"}'
-
-# v2.0 重新索引
-curl -X POST http://localhost:8000/api/documents/1/reindex
-
-# v2.0 查看图片资产
-curl http://localhost:8000/api/documents/1/assets
-
-# v2.0 查看文档任务历史
-curl http://localhost:8000/api/documents/1/jobs
-
-# v2.0 查看 chunks（含 image_refs）
-curl http://localhost:8000/api/documents/1/chunks
-
-# A 股：搜索公告
-curl -b /tmp/rag_cookie.txt \
-  "http://localhost:8000/api/finance/ashare/companies/600519/announcements?keyword=2023%E5%B9%B4%E5%B9%B4%E5%BA%A6%E6%8A%A5%E5%91%8A"
-
-# A 股：导入年报
-curl -b /tmp/rag_cookie.txt -X POST http://localhost:8000/api/finance/ashare/companies/600519/filings/import \
-  -H "Content-Type: application/json" \
-  -d '{"fiscal_year": 2023}'
-
-# MCP：列出工具
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | PYTHONPATH=backend python mcp/server.py
-
-# MCP：获取 A 股年报公告
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_ashare_annual_report","arguments":{"ticker":"600519","fiscal_year":2023}}}' \
-  | PYTHONPATH=backend python mcp/server.py
+cd frontend
+PATH=/root/.nvm/versions/node/v22.20.0/bin:$PATH npm run build
 ```
 
-## 目录结构
+最近一次验证结果：
 
-```
-workspace/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── config.py            # 配置
-│   │   ├── db.py                # 数据库
-│   │   ├── models.py            # SQLAlchemy 模型
-│   │   ├── schemas.py           # Pydantic Schema
-│   │   ├── redis_client.py      # Redis 客户端
-│   │   ├── worker.py            # 异步 Worker
-│   │   ├── routers/             # API 路由
-│   │   │   ├── documents.py, jobs.py, chat.py
-│   │   │   ├── settings.py, health.py, auth.py
-│   │   │   ├── traces.py, evaluations.py, collections.py
-│   │   │   └── finance.py       # 财报工作台 API
-│   │   └── services/            # 业务服务
-│   │       ├── document_loader.py, splitter.py
-│   │       ├── image_loader.py       # v2.0 PDF/图片提取
-│   │       ├── vision_service.py     # v2.0 Vision 描述生成
-│   │       ├── asset_service.py      # v2.0 图片资产管理
-│   │       ├── embedding_provider.py, vector_store.py
-│   │       ├── retriever.py, rag_service.py
-│   │       ├── finance_agent.py, finance_dataset_builder.py, finance_evaluation.py
-│   │       ├── sec_connector.py, ashare_connector.py, ashare_structured_provider.py
-│   │       ├── finance_sections.py
-│   │       ├── cache_service.py, rate_limit.py
-│   │       ├── trace_service.py, evaluation_service.py
-│   ├── Dockerfile
-│   └── Dockerfile.worker
-├── frontend/                    # Next.js 前端
-│   ├── app/
-│   │   ├── documents/           # 文档列表 + [id] 详情页
-│   │   ├── finance/             # 财报工作台首页 / 公司 / Agent / 评估
-│   │   ├── chat/                # 问答
-│   │   ├── settings/            # 设置
-│   │   ├── health/              # 健康检查
-│   │   └── evaluations/         # 评估
-│   └── lib/                      # API client + 类型定义
-│       ├── api.ts
-│       └── types.ts               # v2.0 TypeScript 类型定义
-├── mcp/
-│   └── server.py                # MCP server
-├── scripts/
-│   ├── finance_benchmark_report.py
-│   ├── ashare_daily_update.py
-│   └── ashare_benchmark_report.py
-├── storage/                     # 数据存储
-│   ├── uploads/, chroma/, traces/, evaluations/, assets/
-├── docker-compose.yml
-└── requirements.txt
-```
+- 后端 A 股核心测试：`17 passed`
+- 前端构建：`npm run build` 通过
+- Docker 重建：`docker compose up -d --build backend worker frontend` 可启动
+
+## 项目边界
+
+- 只使用公开或可替换的数据源 provider。
+- MCP 作为受控 provider 接入，不允许 Agent 任意调用外部工具。
+- 缺少公告、年报或结构化财务事实时，只展示热度、关注、市场情绪和数据覆盖状态等弱信号。
+- 弱信号不替代财务事实，不推导估值、收入利润变化或交易结论。

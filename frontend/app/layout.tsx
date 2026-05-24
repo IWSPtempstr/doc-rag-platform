@@ -1,7 +1,7 @@
 import { AuthProvider } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
 
-export const metadata = { title: "财报分析工作台", description: "Financial RAG Workbench" };
+export const metadata = { title: "A 股公告与情绪分析工作台", description: "A-share disclosure and sentiment workbench" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

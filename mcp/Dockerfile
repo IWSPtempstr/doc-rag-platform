@@ -2,11 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY ../requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ../backend /app/backend
-COPY . /app/mcp
+COPY backend/app /app/backend/app
+COPY mcp /app/mcp
 
 ENV DATABASE_URL=sqlite:///./storage/app.db
 ENV REDIS_URL=redis://redis:6379/0

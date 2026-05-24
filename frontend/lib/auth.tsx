@@ -15,6 +15,7 @@ interface Workspace {
   id: number;
   name: string;
   slug: string;
+  role?: string | null;
 }
 
 interface AuthState {

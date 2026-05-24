@@ -152,6 +152,26 @@ export interface CompanyCoverage {
   }>;
 }
 
+export interface CompanyResearchSummary {
+  company: {
+    id: number;
+    ticker: string;
+    name: string;
+    market: string | null;
+    industry: string | null;
+    watchlisted: boolean;
+  };
+  available_signals: Record<string, any>;
+  missing_items: string[];
+  failure_reasons: Record<string, string>;
+  can_infer: string[];
+  cannot_infer: string[];
+  next_actions: Array<{ key: string; label: string; priority: number }>;
+  analysis_boundary: string[];
+  coverage_tags: string[];
+  generated_at: string;
+}
+
 export interface Filing {
   id: number;
   workspace_id: number;
@@ -193,6 +213,8 @@ export interface FinanceAgentResult {
 
 export interface AgentRunSummary {
   id: number;
+  company_id?: number | null;
+  company?: { id: number; ticker: string; name: string } | null;
   filing_id: number | null;
   question: string;
   mode: string;
@@ -228,6 +250,38 @@ export interface ConnectorStatusResponse {
   }>;
 }
 
+export interface WatchlistItem {
+  id: number;
+  user_id: number;
+  workspace_id: number;
+  ticker: string;
+  priority: number;
+  created_at: string;
+  company: { id: number; ticker: string; name: string } | null;
+}
+
+export interface DailyBrief {
+  trade_date: string;
+  status: string;
+  summary: string | null;
+  items: Array<Record<string, any>>;
+  metadata: Record<string, any>;
+}
+
+export interface SentimentFact {
+  id: number;
+  workspace_id: number;
+  ticker: string | null;
+  trade_date: string;
+  scope: string;
+  score: number | null;
+  label: string | null;
+  source: string;
+  evidence: string | null;
+  metadata_json: Record<string, any> | null;
+  created_at: string;
+}
+
 export interface FinanceEvalResult {
   id: number;
   workspace_id: number;
@@ -236,6 +290,28 @@ export interface FinanceEvalResult {
   metrics: Record<string, any> | null;
   results: any;
   created_at: string;
+}
+
+export interface FinanceAlert {
+  type: string;
+  alert_type: string;
+  source: string;
+  dataset_name: string | null;
+  result_id: number | null;
+  run_id: number | null;
+  metric_value: number;
+  threshold: number;
+  direction: string;
+  severity: string;
+  created_at: string;
+  message: string;
+}
+
+export interface FinanceEvalJsonlExport {
+  dataset_id: number;
+  dataset_name: string;
+  file_path: string;
+  case_count: number;
 }
 
 export interface EvalDataset {

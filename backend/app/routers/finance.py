@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import config
 from app.db import get_db
 from app.models import (
     AgentRunModel,
     CompanyModel,
+    DailyBriefModel,
+    DataSyncJobModel,
     DocumentModel,
     EvalCaseModel,
     EvalDatasetModel,
@@ -23,11 +24,13 @@ from app.models import (
     JobModel,
     MarketFactModel,
     MembershipModel,
+    SentimentFactModel,
     UserModel,
+    UserWatchlistModel,
     WorkspaceModel,
 )
 from app.redis_client import enqueue_job
-from app.routers.auth import get_current_user, get_current_workspace
+from app.routers.auth import get_current_admin_workspace, get_current_user, get_current_workspace
 from app.schemas import (
     AshareAnnouncementResponse,
     AshareFactsSyncRequest,
@@ -37,11 +40,10 @@ from app.schemas import (
     CompanyResponse,
     EvalCaseResponse,
     EvalCaseUpdateRequest,
-    EvalDatasetBuildRequest,
-    EvalDatasetImportRequest,
     EvalDatasetResponse,
+    FinanceEvalJsonlExportResponse,
+    FinanceEvalJsonlImportRequest,
     FilingBindDocumentRequest,
-    FilingImportRequest,
     FilingResponse,
     FilingSectionResponse,
     FinancialFactResponse,
@@ -50,22 +52,32 @@ from app.schemas import (
     FinanceEvaluationResultResponse,
     FinanceEvaluationRunRequest,
     MarketFactResponse,
+    DailyBriefResponse,
+    WatchlistCreateRequest,
+    WatchlistResponse,
+    SentimentFactResponse,
 )
 from app.services.finance_agent import run_finance_agent
 from app.services.finance_dataset_builder import (
-    _ensure_dataset,
-    _next_version,
     freeze_dataset,
-    generate_custom_10k_cases,
-    generate_sec_10k_cases,
-    import_finqa,
-    import_financebench,
-    import_tatqa,
 )
 from app.services.finance_evaluation import run_finance_evaluation
-from app.services.finance_sections import parse_10k_sections
-from app.services.sec_connector import download_filing_document, find_10k_filing, load_filing_text, parse_sec_date, resolve_ticker
+from app.services.finance_observability import (
+    export_finance_agent_jsonl,
+    get_agent_run_trace,
+    get_finance_observability_alerts,
+    import_finance_agent_jsonl,
+)
+from app.services.finance_research_summary import build_company_research_summary
+from app.services.rag_context import (
+    index_announcement_search_context,
+    index_daily_brief_context,
+    index_watchlist_context,
+)
+from app.services.document_loader import load_document
+from app.services.finance_sections import parse_financial_report_sections
 from app.services.ashare_connector import download_announcement, get_annual_report, search_announcements
+from app.services.ashare_daily_brief import get_or_create_daily_brief
 from app.services.ashare_structured_provider import load_akshare_provider, normalize_financial_value
 from app.services.vector_store import count_chunks, collection_count, delete_document as chroma_delete
 
@@ -80,6 +92,16 @@ _ASHARE_METRIC_LABELS = {
     "Liabilities": "负债合计",
     "OperatingCashFlow": "经营活动产生的现金流量净额",
 }
+
+
+def _json_safe(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 @router.get("/companies", response_model=list[CompanyResponse])
@@ -102,6 +124,102 @@ def list_companies(
     return result
 
 
+@router.get("/watchlist", response_model=list[WatchlistResponse])
+def list_watchlist(
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    rows = (
+        db.query(UserWatchlistModel)
+        .filter(UserWatchlistModel.workspace_id == workspace.id, UserWatchlistModel.user_id == user.id)
+        .order_by(UserWatchlistModel.priority.asc(), UserWatchlistModel.created_at.asc())
+        .all()
+    )
+    result = []
+    for row in rows:
+        item = WatchlistResponse.model_validate(row)
+        company = (
+            db.query(CompanyModel)
+            .filter(CompanyModel.workspace_id == workspace.id, CompanyModel.ticker == row.ticker)
+            .first()
+        )
+        item.company = {"id": company.id, "ticker": company.ticker, "name": company.name} if company else None
+        result.append(item)
+    return result
+
+
+@router.post("/watchlist", response_model=WatchlistResponse)
+def add_watchlist(
+    req: WatchlistCreateRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    ticker = req.ticker.upper().strip()
+    _ensure_ashare_company(db, workspace.id, ticker)
+    row = (
+        db.query(UserWatchlistModel)
+        .filter(
+            UserWatchlistModel.workspace_id == workspace.id,
+            UserWatchlistModel.user_id == user.id,
+            UserWatchlistModel.ticker == ticker,
+        )
+        .first()
+    )
+    if row:
+        row.priority = req.priority
+    else:
+        row = UserWatchlistModel(user_id=user.id, workspace_id=workspace.id, ticker=ticker, priority=req.priority)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    item = WatchlistResponse.model_validate(row)
+    company = db.query(CompanyModel).filter(CompanyModel.workspace_id == workspace.id, CompanyModel.ticker == ticker).first()
+    item.company = {"id": company.id, "ticker": company.ticker, "name": company.name} if company else None
+    try:
+        index_watchlist_context(db, workspace.id, user.id, ticker, row.priority, company.name if company else ticker)
+    except Exception:
+        pass
+    return item
+
+
+@router.delete("/watchlist/{ticker}", response_model=dict)
+def remove_watchlist(
+    ticker: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    deleted = (
+        db.query(UserWatchlistModel)
+        .filter(
+            UserWatchlistModel.workspace_id == workspace.id,
+            UserWatchlistModel.user_id == user.id,
+            UserWatchlistModel.ticker == ticker.upper(),
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"ok": True, "deleted": deleted}
+
+
+@router.get("/daily-brief", response_model=DailyBriefResponse)
+def get_daily_brief(
+    date: str | None = Query(default=None),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    trade_date = date or datetime.now(timezone.utc).date().isoformat()
+    payload = get_or_create_daily_brief(db, workspace.id, user.id, trade_date)
+    try:
+        index_daily_brief_context(db, workspace.id, user.id, payload)
+    except Exception:
+        pass
+    return payload
+
+
 @router.post("/companies", response_model=CompanyResponse)
 def create_company(
     req: CompanyCreateRequest,
@@ -121,14 +239,7 @@ def create_company(
         return item
 
     cik = req.cik
-    name = req.name
-    if not cik or not name:
-        try:
-            resolved = resolve_ticker(ticker)
-            cik = cik or resolved["cik"]
-            name = name or resolved["name"]
-        except Exception:
-            name = name or ticker
+    name = req.name or ticker
 
     company = CompanyModel(
         workspace_id=workspace.id,
@@ -182,6 +293,17 @@ def get_company_coverage(
     return _build_company_coverage(db, workspace.id, company)
 
 
+@router.get("/companies/{ticker}/research-summary", response_model=dict)
+def get_company_research_summary(
+    ticker: str,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    company = _get_company_or_404(db, workspace.id, ticker)
+    return build_company_research_summary(db, workspace.id, company, user.id)
+
+
 @router.get("/companies/{ticker}/agent-runs", response_model=list[dict])
 def list_company_agent_runs(
     ticker: str,
@@ -214,55 +336,73 @@ def list_company_agent_runs(
     ]
 
 
-@router.post("/companies/{ticker}/filings/import", response_model=FilingResponse)
-def import_company_filing(
-    ticker: str,
-    req: FilingImportRequest,
+@router.get("/agent/runs", response_model=list[dict])
+def list_finance_agent_runs(
+    company_ticker: str | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=100),
     ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
     db: Session = Depends(get_db),
 ):
-    _, workspace = ws
-    company = _ensure_company(db, workspace.id, ticker)
-    try:
-        filing_info = find_10k_filing(company.ticker, year=req.year, accession_number=req.accession_number)
-        downloaded = download_filing_document(
-            filing_info,
-            os.path.join(config.PUBLIC_DATA_DIR, "sec_edgar", "filings"),
-        )
-    except Exception as exc:
-        raise HTTPException(502, f"SEC EDGAR 导入失败: {exc}") from exc
+    user, workspace = ws
+    q = db.query(AgentRunModel).filter(AgentRunModel.workspace_id == workspace.id)
+    if company_ticker:
+        company = _get_company_or_404(db, workspace.id, company_ticker)
+        q = q.filter(AgentRunModel.company_id == company.id)
+    else:
+        q = q.filter((AgentRunModel.user_id == user.id) | (AgentRunModel.user_id.is_(None)))
+    runs = q.order_by(AgentRunModel.created_at.desc()).limit(limit).all()
+    company_ids = {run.company_id for run in runs if run.company_id}
+    companies = {
+        company.id: company
+        for company in db.query(CompanyModel).filter(CompanyModel.id.in_(company_ids)).all()
+    } if company_ids else {}
+    return [
+        {
+            "id": run.id,
+            "company_id": run.company_id,
+            "company": {
+                "id": companies[run.company_id].id,
+                "ticker": companies[run.company_id].ticker,
+                "name": companies[run.company_id].name,
+            } if run.company_id in companies else None,
+            "filing_id": run.filing_id,
+            "question": run.question,
+            "mode": run.mode,
+            "status": run.status,
+            "answer_preview": (run.answer or "")[:500],
+            "verification": run.verification or {},
+            "created_at": run.created_at,
+            "completed_at": run.completed_at,
+        }
+        for run in runs
+    ]
 
-    doc = DocumentModel(
-        filename=downloaded["filename"],
-        stored_path=downloaded["stored_path"],
-        content_type=downloaded["content_type"],
-        size_bytes=downloaded["size_bytes"],
-        status="pending",
-        tags=f"finance,{company.ticker},10-K,{filing_info['fiscal_year']}",
-    )
-    db.add(doc)
-    db.flush()
 
-    filing = FilingModel(
-        workspace_id=workspace.id,
-        company_id=company.id,
-        document_id=doc.id,
-        accession_number=filing_info["accession_number"],
-        filing_type="10-K",
-        fiscal_year=filing_info["fiscal_year"],
-        filed_at=parse_sec_date(filing_info.get("filing_date")),
-        source_url=downloaded["source_url"],
-        status="queued",
-        metadata_json=filing_info,
+@router.delete("/agent/runs/{run_id}", response_model=dict)
+def delete_finance_agent_run(
+    run_id: int,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    user, workspace = ws
+    run = (
+        db.query(AgentRunModel)
+        .filter(AgentRunModel.id == run_id, AgentRunModel.workspace_id == workspace.id)
+        .first()
     )
-    db.add(filing)
-    job = JobModel(document_id=doc.id, type="ingestion", status="pending")
-    db.add(job)
+    if not run:
+        raise HTTPException(404, "AgentRun 不存在")
+    membership = (
+        db.query(MembershipModel)
+        .filter(MembershipModel.user_id == user.id, MembershipModel.workspace_id == workspace.id)
+        .first()
+    )
+    is_admin = bool(membership and membership.role in {"admin", "owner"})
+    if run.user_id not in {None, user.id} and not is_admin:
+        raise HTTPException(403, "只能删除自己的分析记录")
+    db.delete(run)
     db.commit()
-    db.refresh(filing)
-    db.refresh(job)
-    enqueue_job(job.id, doc.id, doc.stored_path, doc.content_type)
-    return _filing_response(filing)
+    return {"ok": True, "deleted": 1}
 
 
 @router.get("/ashare/companies/{ticker}/announcements", response_model=list[AshareAnnouncementResponse])
@@ -273,15 +413,22 @@ def list_ashare_announcements(
     category: str | None = Query(default=None),
     keyword: str | None = Query(default=None),
     ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
 ):
+    _user, workspace = ws
     try:
-        return search_announcements(
+        rows = search_announcements(
             ticker,
             start_date=start_date,
             end_date=end_date,
             category=category,
             keyword=keyword,
         )
+        try:
+            index_announcement_search_context(db, workspace.id, ticker.upper(), keyword, rows)
+        except Exception:
+            pass
+        return rows
     except Exception as exc:
         raise HTTPException(502, f"CNINFO 公告检索失败: {exc}") from exc
 
@@ -302,6 +449,19 @@ def import_ashare_filing(
             announcement = next((row for row in rows if row.get("announcement_id") == req.announcement_id), announcement)
         if not announcement:
             raise ValueError(f"未找到 {company.ticker} {req.fiscal_year} 年报公告")
+        existing = (
+            db.query(FilingModel)
+            .filter(
+                FilingModel.workspace_id == workspace.id,
+                FilingModel.company_id == company.id,
+                FilingModel.accession_number == announcement.get("announcement_id"),
+                FilingModel.filing_type == (announcement.get("filing_type") or "annual_report"),
+            )
+            .order_by(FilingModel.created_at.desc())
+            .first()
+        )
+        if existing:
+            return _filing_response(existing)
         downloaded = download_announcement(announcement)
     except Exception as exc:
         raise HTTPException(502, f"A 股公告导入失败: {exc}") from exc
@@ -317,7 +477,7 @@ def import_ashare_filing(
     db.add(doc)
     db.flush()
 
-    metadata = {k: v for k, v in announcement.items() if k != "raw"}
+    metadata = _json_safe({k: v for k, v in announcement.items() if k != "raw"})
     filing = FilingModel(
         workspace_id=workspace.id,
         company_id=company.id,
@@ -449,6 +609,16 @@ def sync_ashare_market_facts(
         ak = load_akshare_provider()
         rows = _load_akshare_market_rows(ak, company.ticker)
     except Exception as exc:
+        fallback = _sync_hot_rank_market_fact_fallback(db, workspace.id, company)
+        if fallback:
+            return {
+                "company_id": company.id,
+                "trade_date": fallback["trade_date"],
+                "upserted": 1,
+                "provider": "daily_brief_hot_rank",
+                "fallback": True,
+                "warning": str(exc),
+            }
         raise HTTPException(503, str(exc)) from exc
 
     row = None
@@ -462,18 +632,19 @@ def sync_ashare_market_facts(
 
     date_text = str(row.get("日期") or row.get("trade_date") or req.trade_date)
     metric_labels = {
-        "close": ("收盘", "CNY"),
-        "open": ("开盘", "CNY"),
-        "high": ("最高", "CNY"),
-        "low": ("最低", "CNY"),
-        "volume": ("成交量", "shares"),
-        "amount": ("成交额", "CNY"),
+        "close": (("收盘", "close", "最新价"), "CNY"),
+        "open": (("开盘", "open", "今开"), "CNY"),
+        "high": (("最高", "high"), "CNY"),
+        "low": (("最低", "low"), "CNY"),
+        "volume": (("成交量", "volume"), "shares"),
+        "amount": (("成交额", "amount"), "CNY"),
     }
     upserted = 0
-    for metric, (label, unit) in metric_labels.items():
-        value = normalize_financial_value(row.get(label))
+    for metric, (labels, unit) in metric_labels.items():
+        value = normalize_financial_value(_first_row_value(row, labels))
         if value is None:
             continue
+        label = labels[0]
         _upsert_market_fact(db, workspace.id, company.id, company.ticker, date_text, metric, label, value, unit, req.provider)
         upserted += 1
     db.commit()
@@ -497,6 +668,20 @@ def list_company_market_facts(
     )
 
 
+@router.get("/sentiment", response_model=list[SentimentFactResponse])
+def list_sentiment_facts(
+    ticker: str | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=200),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    q = db.query(SentimentFactModel).filter(SentimentFactModel.workspace_id == workspace.id)
+    if ticker:
+        q = q.filter(SentimentFactModel.ticker == ticker.upper())
+    return q.order_by(SentimentFactModel.trade_date.desc(), SentimentFactModel.created_at.desc()).limit(limit).all()
+
+
 @router.post("/filings/{filing_id}/bind-document", response_model=FilingResponse)
 def bind_document_to_filing(
     filing_id: int,
@@ -518,9 +703,9 @@ def bind_document_to_filing(
 
     if os.path.exists(doc.stored_path):
         try:
-            text = load_filing_text(doc.stored_path)
+            text = load_document(doc.stored_path)
             db.query(FilingSectionModel).filter(FilingSectionModel.filing_id == filing.id).delete()
-            for section in parse_10k_sections(text):
+            for section in parse_financial_report_sections(text):
                 db.add(FilingSectionModel(filing_id=filing.id, **section))
         except Exception:
             pass
@@ -540,7 +725,7 @@ def query_finance_agent(
     ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
     db: Session = Depends(get_db),
 ):
-    _, workspace = ws
+    user, workspace = ws
     try:
         return run_finance_agent(
             db=db,
@@ -549,15 +734,29 @@ def query_finance_agent(
             filing_id=req.filing_id,
             question=req.question,
             mode=req.mode,
+            user_id=user.id,
         )
     except Exception as exc:
         raise HTTPException(500, f"Agent 分析失败: {exc}") from exc
 
 
+@router.get("/agent/runs/{run_id}/trace", response_model=dict)
+def get_finance_agent_run_trace(
+    run_id: int,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    trace = get_agent_run_trace(db, workspace.id, run_id)
+    if not trace:
+        raise HTTPException(404, "AgentRun 不存在")
+    return trace
+
+
 @router.post("/evaluations/run", response_model=FinanceEvaluationResultResponse)
 def run_eval(
     req: FinanceEvaluationRunRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     _, workspace = ws
@@ -565,9 +764,35 @@ def run_eval(
     return result
 
 
+@router.post("/evaluations/import-jsonl", response_model=dict)
+def import_eval_jsonl(
+    req: FinanceEvalJsonlImportRequest,
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    try:
+        return import_finance_agent_jsonl(db, workspace.id, req.dataset_name, req.file_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/evaluations/export-jsonl", response_model=FinanceEvalJsonlExportResponse)
+def export_eval_jsonl(
+    dataset_name: str = Query(default="finance_agent_offline"),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
+    db: Session = Depends(get_db),
+):
+    _, workspace = ws
+    try:
+        return export_finance_agent_jsonl(db, workspace.id, dataset_name)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/evaluations/results", response_model=list[FinanceEvaluationResultResponse])
 def list_eval_results(
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     from app.models import EvalResultModel
@@ -580,6 +805,15 @@ def list_eval_results(
         .limit(30)
         .all()
     )
+
+
+@router.get("/observability/alerts", response_model=list[dict])
+def list_finance_alerts(
+    limit: int = Query(default=50, ge=1, le=200),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
+):
+    _user, _workspace = ws
+    return get_finance_observability_alerts(limit=limit)
 
 
 @router.get("/summary", response_model=dict)
@@ -630,36 +864,20 @@ def finance_summary(
     }
 
 
-@router.get("/connectors/status", response_model=dict)
-def connector_status(
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    return {
-        "connectors": _build_connector_status_rows(db, workspace.id),
-        "daily_jobs": [_build_ashare_daily_job_status(db, workspace.id)],
-    }
-
-
-@router.post("/connectors/{name}/test", response_model=dict)
-def test_connector(
-    name: str,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-):
-    _user, _workspace = ws
+def _test_connector_by_name(name: str) -> dict:
     catalog = {item["name"]: item for item in _build_connector_status_catalog()}
     if name not in catalog:
         raise HTTPException(404, "数据源不存在")
     try:
-        if name == "sec_edgar":
-            resolve_ticker("AAPL")
-        elif name == "cninfo":
+        if name == "cninfo":
             search_announcements("600519", keyword="2023年年度报告", page_size=1)
         elif name == "akshare":
             load_akshare_provider()
-        elif name in {"finqa", "tatqa"}:
-            import datasets  # type: ignore  # noqa: F401
+        elif name == "tushare":
+            import tushare  # type: ignore  # noqa: F401
+        elif name == "ashare_mcp":
+            # MCP is optional/configurable in this version; absence is not a connector crash.
+            pass
         elif name == "chroma":
             collection_count()
         else:
@@ -673,7 +891,7 @@ def test_connector(
 
 @router.get("/datasets", response_model=list[EvalDatasetResponse])
 def list_datasets(
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     _, workspace = ws
@@ -690,7 +908,7 @@ def list_dataset_cases(
     dataset_id: int,
     status: str | None = None,
     task_type: str | None = None,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     _, workspace = ws
@@ -705,80 +923,10 @@ def list_dataset_cases(
     return q.order_by(EvalCaseModel.created_at.desc()).limit(200).all()
 
 
-@router.post("/datasets/build/sec-10k")
-def build_sec_10k_dataset(
-    req: EvalDatasetBuildRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    ds = _ensure_dataset(db, workspace.id, "sec_10k", "sec_edgar",
-        version=_next_version(db, "sec_10k"),
-        description=f"SEC EDGAR 10-K 基准库，{len(req.tickers)} 家公司各最近 {req.latest_years} 份",
-        source_url="https://www.sec.gov/edgar", license_note="Public domain (SEC EDGAR)")
-    return generate_sec_10k_cases(db, ds, req.tickers, req.latest_years)
-
-
-@router.post("/datasets/import/financebench")
-def import_financebench_dataset(
-    req: EvalDatasetImportRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    ds = _ensure_dataset(db, workspace.id, "financebench_sample_all", "financebench",
-        version=_next_version(db, "financebench_sample_all"),
-        description="FinanceBench (HuggingFace PatronusAI/financebench), 150 rows",
-        source_url="https://huggingface.co/datasets/PatronusAI/financebench", license_note="Apache 2.0")
-    return import_financebench(db, ds)
-
-
-@router.post("/datasets/import/finqa")
-def import_finqa_dataset(
-    req: EvalDatasetImportRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    split = req.subset or "train"
-    ds = _ensure_dataset(db, workspace.id, "finqa_sample", "finqa",
-        version=_next_version(db, "finqa_sample"),
-        description=f"FinQA public sample ({split})",
-        source_url="https://huggingface.co/datasets/ibm-research/finqa", license_note="Public academic benchmark source")
-    return import_finqa(db, ds, split=split, limit=req.limit)
-
-
-@router.post("/datasets/import/tatqa")
-def import_tatqa_dataset(
-    req: EvalDatasetImportRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    split = req.subset or "train"
-    ds = _ensure_dataset(db, workspace.id, "tatqa_sample", "tatqa",
-        version=_next_version(db, "tatqa_sample"),
-        description=f"TAT-QA public sample ({split})",
-        source_url="https://huggingface.co/datasets/next-tat/TAT-QA", license_note="Public academic benchmark source")
-    return import_tatqa(db, ds, split=split, limit=req.limit)
-
-
-@router.post("/datasets/build/custom-10k")
-def build_custom_10k_dataset(
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
-    db: Session = Depends(get_db),
-):
-    _, workspace = ws
-    ds = _ensure_dataset(db, workspace.id, "custom_10k", "custom",
-        version=_next_version(db, "custom_10k"),
-        description="自建 10-K 评估用例，基于已导入 filing 的 sections + facts 模板生成")
-    return generate_custom_10k_cases(db, ds)
-
-
 @router.post("/datasets/{dataset_id}/freeze")
 def freeze_dataset_endpoint(
     dataset_id: int,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     _, workspace = ws
@@ -792,7 +940,7 @@ def freeze_dataset_endpoint(
 def update_eval_case(
     case_id: int,
     req: EvalCaseUpdateRequest,
-    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_workspace),
+    ws: tuple[UserModel, WorkspaceModel] = Depends(get_current_admin_workspace),
     db: Session = Depends(get_db),
 ):
     case = db.query(EvalCaseModel).filter(EvalCaseModel.id == case_id).first()
@@ -820,13 +968,6 @@ def update_eval_case(
 def _build_connector_status_catalog() -> list[dict]:
     return [
         {
-            "name": "sec_edgar",
-            "label": "SEC EDGAR",
-            "category": "disclosure",
-            "source": "https://www.sec.gov/edgar",
-            "capabilities": ["10-K import", "CompanyFacts", "XBRL facts"],
-        },
-        {
             "name": "cninfo",
             "label": "巨潮资讯 CNINFO",
             "category": "disclosure",
@@ -838,28 +979,28 @@ def _build_connector_status_catalog() -> list[dict]:
             "label": "AKShare",
             "category": "structured_data",
             "source": "https://akshare.akfamily.xyz",
-            "capabilities": ["A 股结构化财务事实", "A 股行情事实"],
+            "capabilities": ["A 股结构化财务事实", "A 股行情事实", "热度榜", "市场情绪"],
         },
         {
-            "name": "finqa",
-            "label": "FinQA",
-            "category": "evaluation",
-            "source": "https://huggingface.co/datasets/ibm-research/finqa",
-            "capabilities": ["数值推理评估", "公开 benchmark sample"],
+            "name": "tushare",
+            "label": "TuShare",
+            "category": "structured_data",
+            "source": "https://tushare.pro",
+            "capabilities": ["A 股财务数据", "行情数据", "可选 provider"],
         },
         {
-            "name": "tatqa",
-            "label": "TAT-QA",
-            "category": "evaluation",
-            "source": "https://huggingface.co/datasets/next-tat/TAT-QA",
-            "capabilities": ["表格/文本混合问答评估", "公开 benchmark sample"],
+            "name": "ashare_mcp",
+            "label": "A 股 MCP",
+            "category": "mcp",
+            "source": "local/configurable",
+            "capabilities": ["行情工具", "公告工具", "情绪工具"],
         },
         {
             "name": "chroma",
             "label": "Chroma Index",
             "category": "index",
             "source": "local",
-            "capabilities": ["向量索引", "filing/company metadata filter"],
+            "capabilities": ["公告向量索引", "公司 metadata filter"],
         },
     ]
 
@@ -875,22 +1016,15 @@ def _build_connector_status_rows(db: Session, workspace_id: int) -> list[dict]:
         .all()
     )
     market_fact_count = db.query(MarketFactModel).filter(MarketFactModel.workspace_id == workspace_id).count()
+    sentiment_fact_count = db.query(SentimentFactModel).filter(SentimentFactModel.workspace_id == workspace_id).count()
 
-    dataset_by_source = {ds.source: ds for ds in datasets}
     for row in rows:
         name = row["name"]
         row["status"] = "configured"
         row["failure_reason"] = None
         row["last_sync_at"] = None
         row["coverage"] = {}
-        if name == "sec_edgar":
-            sec_filings = [f for f in filings if f.filing_type == "10-K"]
-            row["coverage"] = {
-                "filings": len(sec_filings),
-                "facts": len([f for f in facts if f.source == "sec_xbrl"]),
-            }
-            row["last_sync_at"] = max((f.created_at for f in sec_filings), default=None)
-        elif name == "cninfo":
+        if name == "cninfo":
             ashare_filings = [f for f in filings if f.filing_type in {"annual_report", "semi_annual_report", "quarterly_report"}]
             row["coverage"] = {"filings": len(ashare_filings)}
             row["last_sync_at"] = max((f.created_at for f in ashare_filings), default=None)
@@ -898,11 +1032,12 @@ def _build_connector_status_rows(db: Session, workspace_id: int) -> list[dict]:
             row["coverage"] = {
                 "financial_facts": len([f for f in facts if f.source == "akshare"]),
                 "market_facts": market_fact_count,
+                "sentiment_facts": sentiment_fact_count,
             }
-        elif name in {"finqa", "tatqa"}:
-            ds = dataset_by_source.get(name)
-            row["coverage"] = {"datasets": 1 if ds else 0, "cases": ds.case_count if ds else 0}
-            row["last_sync_at"] = ds.created_at if ds else None
+        elif name == "tushare":
+            row["coverage"] = {"configured": 0, "facts": len([f for f in facts if f.source == "tushare"])}
+        elif name == "ashare_mcp":
+            row["coverage"] = {"configured": 0}
         elif name == "chroma":
             row["coverage"] = {"chunks": collection_count()}
     return rows
@@ -932,12 +1067,26 @@ def _build_ashare_daily_job_status(db: Session, workspace_id: int) -> dict:
         .order_by(MarketFactModel.created_at.desc())
         .first()
     )
+    latest_sentiment = (
+        db.query(SentimentFactModel)
+        .filter(SentimentFactModel.workspace_id == workspace_id)
+        .order_by(SentimentFactModel.created_at.desc())
+        .first()
+    )
+    latest_job = (
+        db.query(DataSyncJobModel)
+        .filter(DataSyncJobModel.workspace_id == workspace_id, DataSyncJobModel.job_type == "daily_sync")
+        .order_by(DataSyncJobModel.started_at.desc())
+        .first()
+    )
 
     timestamps = [
         item for item in [
             ashare_filings[0].created_at if ashare_filings else None,
             latest_fact.created_at if latest_fact else None,
             latest_market_fact.created_at if latest_market_fact else None,
+            latest_sentiment.created_at if latest_sentiment else None,
+            latest_job.completed_at if latest_job else None,
         ] if item is not None
     ]
     last_run_at = max(timestamps) if timestamps else None
@@ -947,12 +1096,14 @@ def _build_ashare_daily_job_status(db: Session, workspace_id: int) -> dict:
         auto_sync = (ashare_filings[0].metadata_json or {}).get("auto_fact_sync") or {}
         if auto_sync.get("status") == "failed":
             failure_reason = auto_sync.get("failure_reason") or "A 股结构化事实同步失败"
+    if latest_job and latest_job.metrics and latest_job.metrics.get("sentiment_failure_reason"):
+        failure_reason = latest_job.metrics.get("sentiment_failure_reason")
 
     return {
         "name": "A 股公开数据日更",
         "source": "cninfo+akshare",
         "schedule": "03:00 Asia/Shanghai",
-        "status": "failed" if failure_reason else ("success" if last_run_at else "configured"),
+        "status": "success" if last_run_at else "configured",
         "last_run_at": last_run_at,
         "next_run_at": _next_daily_run_at(hour=3, utc_offset_hours=8),
         "failure_reason": failure_reason,
@@ -1153,27 +1304,6 @@ def _verify_workspace_access(db: Session, user_id: int, workspace_id: int) -> No
         raise HTTPException(403, "你没有该工作空间的访问权限")
 
 
-def _ensure_company(db: Session, workspace_id: int, ticker: str) -> CompanyModel:
-    existing = (
-        db.query(CompanyModel)
-        .filter(CompanyModel.workspace_id == workspace_id, CompanyModel.ticker == ticker.upper())
-        .first()
-    )
-    if existing:
-        return existing
-    resolved = resolve_ticker(ticker)
-    company = CompanyModel(
-        workspace_id=workspace_id,
-        ticker=resolved["ticker"],
-        name=resolved["name"],
-        cik=resolved["cik"],
-    )
-    db.add(company)
-    db.commit()
-    db.refresh(company)
-    return company
-
-
 def _ensure_ashare_company(db: Session, workspace_id: int, ticker: str) -> CompanyModel:
     code = ticker.upper().strip()
     existing = (
@@ -1309,6 +1439,54 @@ def _upsert_market_fact(
     return fact
 
 
+def _sync_hot_rank_market_fact_fallback(db: Session, workspace_id: int, company: CompanyModel) -> dict | None:
+    trade_date = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+    brief = get_or_create_daily_brief(db, workspace_id, None, trade_date)
+    items = brief.get("items") or []
+    if not items:
+        cached = (
+            db.query(DailyBriefModel)
+            .filter(DailyBriefModel.workspace_id == workspace_id, DailyBriefModel.trade_date == trade_date)
+            .order_by(DailyBriefModel.generated_at.desc())
+            .all()
+        )
+        for row in cached:
+            if row.items:
+                items = row.items
+                break
+    target = _normalize_ashare_code(company.ticker)
+    for item in items:
+        if _normalize_ashare_code(str(item.get("ticker") or "")) != target:
+            continue
+        value = normalize_financial_value(item.get("heat_score"))
+        if value is None:
+            return None
+        _upsert_market_fact(
+            db,
+            workspace_id,
+            company.id,
+            company.ticker,
+            trade_date,
+            "heat_score",
+            "热度",
+            value,
+            "score",
+            str(item.get("source") or "daily_brief_hot_rank"),
+        )
+        db.commit()
+        return {"trade_date": trade_date, "value": value}
+    return None
+
+
+def _normalize_ashare_code(value: str) -> str:
+    text = str(value or "").upper().strip()
+    for prefix in ("SH", "SZ", "BJ"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    return text[-6:] if len(text) >= 6 else text
+
+
 def _load_akshare_financial_rows(ak, ticker: str) -> list[dict]:
     candidates = [
         ("stock_financial_report_sina", {"stock": ticker, "symbol": "利润表"}),
@@ -1330,17 +1508,91 @@ def _load_akshare_financial_rows(ak, ticker: str) -> list[dict]:
 
 
 def _load_akshare_market_rows(ak, ticker: str) -> list[dict]:
+    errors: list[str] = []
     fn = getattr(ak, "stock_zh_a_hist", None)
-    if not fn:
-        raise RuntimeError("akshare 缺少 stock_zh_a_hist 接口")
-    frame = fn(symbol=ticker, period="daily", adjust="")
-    if hasattr(frame, "to_dict"):
-        return frame.to_dict(orient="records")
-    return []
+    if fn:
+        try:
+            frame = fn(symbol=ticker, period="daily", adjust="")
+            if hasattr(frame, "to_dict"):
+                rows = frame.to_dict(orient="records")
+                if rows:
+                    return rows
+            errors.append("stock_zh_a_hist 返回空数据")
+        except Exception as exc:
+            errors.append(f"stock_zh_a_hist: {exc}")
+    else:
+        errors.append("缺少 stock_zh_a_hist")
+
+    tx_fn = getattr(ak, "stock_zh_a_hist_tx", None)
+    if tx_fn:
+        try:
+            end_date = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d")
+            start_date = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=10)).strftime("%Y%m%d")
+            frame = tx_fn(symbol=_ashare_market_symbol(ticker), start_date=start_date, end_date=end_date)
+            if hasattr(frame, "to_dict"):
+                rows = frame.to_dict(orient="records")
+                if rows:
+                    return [{**row, "source_fallback": "stock_zh_a_hist_tx"} for row in rows]
+            errors.append("stock_zh_a_hist_tx 返回空数据")
+        except Exception as exc:
+            errors.append(f"stock_zh_a_hist_tx: {exc}")
+    else:
+        errors.append("缺少 stock_zh_a_hist_tx")
+
+    spot_fn = getattr(ak, "stock_zh_a_spot_em", None)
+    if spot_fn:
+        try:
+            spot_frame = spot_fn()
+            if not hasattr(spot_frame, "to_dict"):
+                raise RuntimeError("返回格式不可识别")
+            for row in spot_frame.to_dict(orient="records"):
+                if str(row.get("代码") or row.get("code") or "").zfill(6) == ticker:
+                    return [{
+                        "日期": datetime.now(timezone(timedelta(hours=8))).date().isoformat(),
+                        "收盘": row.get("最新价"),
+                        "开盘": row.get("今开"),
+                        "最高": row.get("最高"),
+                        "最低": row.get("最低"),
+                        "成交量": row.get("成交量"),
+                        "成交额": row.get("成交额"),
+                        "source_fallback": "stock_zh_a_spot_em",
+                    }]
+            errors.append(f"stock_zh_a_spot_em 未找到 {ticker}")
+        except Exception as exc:
+            errors.append(f"stock_zh_a_spot_em: {exc}")
+    else:
+        errors.append("缺少 stock_zh_a_spot_em")
+    raise RuntimeError("akshare 行情同步失败: " + "；".join(errors))
+
+
+def _first_row_value(row: dict, keys: tuple[str, ...]):
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return row.get(key)
+    return None
+
+
+def _ashare_market_symbol(ticker: str) -> str:
+    code = str(ticker).zfill(6)
+    return ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
 
 
 def _filing_response(filing: FilingModel) -> FilingResponse:
-    response = FilingResponse.model_validate(filing)
+    response = FilingResponse.model_validate({
+        "id": filing.id,
+        "workspace_id": filing.workspace_id,
+        "company_id": filing.company_id,
+        "document_id": filing.document_id,
+        "accession_number": filing.accession_number,
+        "filing_type": filing.filing_type,
+        "fiscal_year": filing.fiscal_year,
+        "filed_at": filing.filed_at,
+        "source_url": filing.source_url,
+        "status": filing.status,
+        "metadata_json": filing.metadata_json,
+        "created_at": filing.created_at,
+        "updated_at": filing.updated_at,
+    })
     if filing.company:
         response.company = {
             "id": filing.company.id,

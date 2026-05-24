@@ -80,7 +80,7 @@ def ensure_default_workspace(db: Session, user: UserModel) -> WorkspaceModel:
     workspace = WorkspaceModel(name="Finance Research", slug=f"finance-{user.id}")
     db.add(workspace)
     db.flush()
-    db.add(MembershipModel(user_id=user.id, workspace_id=workspace.id, role="owner"))
+    db.add(MembershipModel(user_id=user.id, workspace_id=workspace.id, role="admin"))
     db.commit()
     db.refresh(workspace)
     return workspace
@@ -116,4 +116,3 @@ def get_user_by_token(db: Session, token: str | None) -> UserModel | None:
     if not payload:
         return None
     return db.query(UserModel).filter(UserModel.id == int(payload["sub"])).first()
-

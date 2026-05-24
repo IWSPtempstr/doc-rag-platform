@@ -91,10 +91,37 @@ export const api = {
     request(`/finance/companies/${encodeURIComponent(ticker)}`, { method: "DELETE" }),
   getCompanyCoverage: (ticker: string) =>
     request(`/finance/companies/${encodeURIComponent(ticker)}/coverage`),
+  getCompanyResearchSummary: (ticker: string) =>
+    request(`/finance/companies/${encodeURIComponent(ticker)}/research-summary`),
+  getWatchlist: () => request("/finance/watchlist"),
+  addWatchlist: (data: object) =>
+    request("/finance/watchlist", { method: "POST", body: JSON.stringify(data) }),
+  removeWatchlist: (ticker: string) =>
+    request(`/finance/watchlist/${encodeURIComponent(ticker)}`, { method: "DELETE" }),
+  getDailyBrief: (date?: string) =>
+    request(`/finance/daily-brief${date ? `?date=${encodeURIComponent(date)}` : ""}`),
+  getSentimentFacts: (params?: { ticker?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.ticker) qs.set("ticker", params.ticker);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request(`/finance/sentiment${q ? `?${q}` : ""}`);
+  },
+  syncSentiment: () =>
+    request("/admin/finance/jobs/daily-sync/run", { method: "POST" }),
   listCompanyAgentRuns: (ticker: string, limit?: number) => {
     const qs = limit ? `?limit=${limit}` : "";
     return request(`/finance/companies/${encodeURIComponent(ticker)}/agent-runs${qs}`);
   },
+  listFinanceAgentRuns: (params?: { company_ticker?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.company_ticker) qs.set("company_ticker", params.company_ticker);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return request(`/finance/agent/runs${q ? `?${q}` : ""}`);
+  },
+  deleteFinanceAgentRun: (runId: number) =>
+    request(`/finance/agent/runs/${runId}`, { method: "DELETE" }),
   importFiling: (ticker: string, data: object) =>
     request(`/finance/companies/${encodeURIComponent(ticker)}/filings/import`, {
       method: "POST",
@@ -133,15 +160,20 @@ export const api = {
     request(`/finance/filings/${id}/bind-document`, { method: "POST", body: JSON.stringify(data) }),
   queryFinanceAgent: (data: object) =>
     request("/finance/agent/query", { method: "POST", body: JSON.stringify(data) }),
-  getConnectorStatus: () => request("/finance/connectors/status"),
-  testConnector: (name: string) =>
-    request(`/finance/connectors/${encodeURIComponent(name)}/test`, { method: "POST" }),
+  getFinanceAgentTrace: (runId: number) =>
+    request(`/finance/agent/runs/${runId}/trace`),
   runFinanceEvaluation: (data: object) =>
     request("/finance/evaluations/run", { method: "POST", body: JSON.stringify(data) }),
   listFinanceEvaluationResults: (workspace_id?: number) => {
     const qs = workspace_id ? `?workspace_id=${workspace_id}` : "";
     return request(`/finance/evaluations/results${qs}`);
   },
+  importFinanceEvalJsonl: (data: object) =>
+    request("/finance/evaluations/import-jsonl", { method: "POST", body: JSON.stringify(data) }),
+  exportFinanceEvalJsonl: (datasetName: string) =>
+    request(`/finance/evaluations/export-jsonl?dataset_name=${encodeURIComponent(datasetName)}`),
+  getFinanceAlerts: (limit?: number) =>
+    request(`/finance/observability/alerts?limit=${limit || 50}`),
   getFinanceSummary: () => request("/finance/summary"),
 
   // Finance Datasets
@@ -155,16 +187,17 @@ export const api = {
   },
   updateEvalCase: (caseId: number, data: object) =>
     request(`/finance/eval-cases/${caseId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  buildSec10kDataset: (data: object) =>
-    request("/finance/datasets/build/sec-10k", { method: "POST", body: JSON.stringify(data) }),
-  importFinancebenchDataset: (data?: object) =>
-    request("/finance/datasets/import/financebench", { method: "POST", body: JSON.stringify(data || {}) }),
-  importFinqaDataset: (data?: object) =>
-    request("/finance/datasets/import/finqa", { method: "POST", body: JSON.stringify(data || {}) }),
-  importTatqaDataset: (data?: object) =>
-    request("/finance/datasets/import/tatqa", { method: "POST", body: JSON.stringify(data || {}) }),
-  buildCustom10kDataset: () =>
-    request("/finance/datasets/build/custom-10k", { method: "POST" }),
   freezeDataset: (datasetId: number) =>
     request(`/finance/datasets/${datasetId}/freeze`, { method: "POST" }),
+
+  // Finance Admin
+  getAdminConnectorStatus: () => request("/admin/finance/connectors/status"),
+  testAdminConnector: (name: string) =>
+    request(`/admin/finance/connectors/${encodeURIComponent(name)}/test`, { method: "POST" }),
+  runAdminDailySync: (date?: string) =>
+    request(`/admin/finance/jobs/daily-sync/run${date ? `?date=${encodeURIComponent(date)}` : ""}`, { method: "POST" }),
+  getAdminDailySyncHistory: (limit?: number) =>
+    request(`/admin/finance/jobs/daily-sync/history?limit=${limit || 30}`),
+  getAdminEvaluationResults: (limit?: number) =>
+    request(`/admin/finance/evaluations/results?limit=${limit || 30}`),
 };

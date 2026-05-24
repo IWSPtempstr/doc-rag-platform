@@ -239,7 +239,7 @@ def _ensure_v3_tables(conn):
                 company_id INTEGER NOT NULL,
                 document_id INTEGER,
                 accession_number VARCHAR(80),
-                filing_type VARCHAR(20) DEFAULT '10-K',
+                filing_type VARCHAR(20) DEFAULT 'annual_report',
                 fiscal_year INTEGER NOT NULL,
                 filed_at DATETIME,
                 source_url VARCHAR(1000),
@@ -318,6 +318,83 @@ def _ensure_v3_tables(conn):
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_id ON market_facts (id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_ticker ON market_facts (ticker)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_market_facts_trade_date ON market_facts (trade_date)"))
+
+    if "user_watchlists" not in existing:
+        conn.execute(text("""
+            CREATE TABLE user_watchlists (
+                id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                ticker VARCHAR(20) NOT NULL,
+                priority INTEGER DEFAULT 100,
+                created_at DATETIME,
+                PRIMARY KEY (id),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_watchlists_id ON user_watchlists (id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_user_watchlists_ticker ON user_watchlists (ticker)"))
+
+    if "sentiment_facts" not in existing:
+        conn.execute(text("""
+            CREATE TABLE sentiment_facts (
+                id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                ticker VARCHAR(20),
+                trade_date VARCHAR(20) NOT NULL,
+                scope VARCHAR(50) DEFAULT 'market',
+                score FLOAT,
+                label VARCHAR(120),
+                source VARCHAR(120) DEFAULT 'akshare',
+                evidence TEXT,
+                metadata_json JSON,
+                created_at DATETIME,
+                PRIMARY KEY (id),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sentiment_facts_id ON sentiment_facts (id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sentiment_facts_ticker ON sentiment_facts (ticker)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sentiment_facts_trade_date ON sentiment_facts (trade_date)"))
+
+    if "daily_briefs" not in existing:
+        conn.execute(text("""
+            CREATE TABLE daily_briefs (
+                id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                user_id INTEGER,
+                trade_date VARCHAR(20) NOT NULL,
+                status VARCHAR(30) DEFAULT 'generated',
+                summary TEXT,
+                items JSON,
+                metadata_json JSON,
+                generated_at DATETIME,
+                PRIMARY KEY (id),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daily_briefs_id ON daily_briefs (id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_daily_briefs_trade_date ON daily_briefs (trade_date)"))
+
+    if "data_sync_jobs" not in existing:
+        conn.execute(text("""
+            CREATE TABLE data_sync_jobs (
+                id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                job_type VARCHAR(80) NOT NULL,
+                source VARCHAR(120) NOT NULL,
+                status VARCHAR(30) DEFAULT 'running',
+                started_at DATETIME,
+                completed_at DATETIME,
+                failure_reason TEXT,
+                metrics JSON,
+                PRIMARY KEY (id),
+                FOREIGN KEY (workspace_id) REFERENCES workspaces (id) ON DELETE CASCADE
+            )
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_data_sync_jobs_id ON data_sync_jobs (id)"))
 
     if "agent_runs" not in existing:
         conn.execute(text("""

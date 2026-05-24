@@ -11,12 +11,12 @@ from app.models import (
     # v3 finance models
     UserModel, WorkspaceModel, MembershipModel,
     CompanyModel, FilingModel, FilingSectionModel, FinancialFactModel,
-    MarketFactModel,
+    MarketFactModel, SentimentFactModel, UserWatchlistModel, DailyBriefModel, DataSyncJobModel,
     AgentRunModel, AgentStepModel, AgentArtifactModel,
     EvalDatasetModel, EvalCaseModel, EvalResultModel,
     ImageAssetModel,
 )
-from app.routers import documents, jobs, chat, settings, health, traces, evaluations, collections, auth, finance
+from app.routers import documents, jobs, chat, settings, health, traces, evaluations, collections, auth, finance, finance_admin
 from app.config import config
 
 # 创建目录
@@ -36,7 +36,7 @@ for d in [
 Base.metadata.create_all(bind=engine)
 ensure_sqlite_schema()
 
-app = FastAPI(title="文档 RAG 平台", version="2.0.0")
+app = FastAPI(title="A 股公告与情绪分析工作台", version="2.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,11 +68,20 @@ app.include_router(evaluations.router)
 app.include_router(collections.router)
 app.include_router(auth.router)
 app.include_router(finance.router)
+app.include_router(finance_admin.router)
 
 # v2.0: static file serving for extracted image assets
 app.mount("/api/assets", StaticFiles(directory=config.ASSETS_DIR), name="assets")
 
 
+@app.on_event("startup")
+async def start_ashare_daily_sync():
+    if config.ASHARE_DAILY_SYNC_ENABLED:
+        from app.services.ashare_daily_scheduler import start_ashare_daily_scheduler
+
+        start_ashare_daily_scheduler(hour=config.ASHARE_DAILY_SYNC_HOUR, utc_offset_hours=8)
+
+
 @app.get("/")
 def root():
-    return {"app": "文档 RAG 平台", "version": "2.0.0"}
+    return {"app": "A 股公告与情绪分析工作台", "version": "2.2.0"}
